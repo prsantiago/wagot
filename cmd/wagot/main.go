@@ -1,65 +1,69 @@
-// Command wagot runs an HTTP server that receives WhatsApp Business Platform
-// webhooks.
+// Command wagot is a WhatsApp bot server. It receives WhatsApp Business
+// Platform webhooks and replies through the Cloud API.
 //
-// Configuration is read from the environment:
+// Configuration comes from environment variables, which can also be set in a
+// .env file (see .env.example). Variables in the real environment take
+// precedence over the file.
 //
-//	WHATSAPP_VERIFY_TOKEN  token entered in the Meta App Dashboard (required)
-//	WHATSAPP_APP_SECRET    Meta app secret used to verify signatures (required)
-//	PORT                   port to listen on (default 8080)
+//	PORT                      port to listen on (default 8080)
+//	WHATSAPP_API_VERSION      Graph API version (default v26.0)
+//	WHATSAPP_PHONE_NUMBER_ID  business phone number ID to answer from (required)
+//	WHATSAPP_ACCESS_TOKEN     token with whatsapp_business_messaging (required)
+//	WHATSAPP_VERIFY_TOKEN     webhook verify token you choose in the dashboard (required)
+//	WHATSAPP_APP_SECRET       Meta app secret used to verify signatures (required)
+//
+// Usage:
+//
+//	wagot [-env-file path]
 package main
 
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/chachin/wagot/internal/bot"
+	"github.com/chachin/wagot/internal/cloudapi"
+	"github.com/chachin/wagot/internal/dotenv"
 	"github.com/chachin/wagot/internal/webhook"
 )
 
-const shutdownTimeout = 10 * time.Second
+const shutdownTimeout = 30 * time.Second
 
 func main() {
+	envFile := flag.String("env-file", ".env", "`path` to a KEY=VALUE file; ignored if missing")
+	flag.Parse()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, os.Getenv, os.Stderr); err != nil {
+	fileVars, err := dotenv.Load(*envFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load env file:", err)
+		os.Exit(1)
+	}
+	if err := run(ctx, getenv(fileVars), os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-type config struct {
-	addr        string
-	verifyToken string
-	appSecret   string
-}
-
-func loadConfig(getenv func(string) string) (config, error) {
-	port := getenv("PORT")
-	if port == "" {
-		port = "8080"
+// getenv looks a key up in the real environment first, then in fileVars.
+func getenv(fileVars map[string]string) func(string) string {
+	return func(key string) string {
+		if v, ok := os.LookupEnv(key); ok {
+			return v
+		}
+		return fileVars[key]
 	}
-	cfg := config{
-		addr:        net.JoinHostPort("", port),
-		verifyToken: getenv("WHATSAPP_VERIFY_TOKEN"),
-		appSecret:   getenv("WHATSAPP_APP_SECRET"),
-	}
-	var errs []error
-	if cfg.verifyToken == "" {
-		errs = append(errs, errors.New("WHATSAPP_VERIFY_TOKEN is required"))
-	}
-	if cfg.appSecret == "" {
-		errs = append(errs, errors.New("WHATSAPP_APP_SECRET is required"))
-	}
-	return cfg, errors.Join(errs...)
 }
 
 // run starts the server and blocks until ctx is cancelled or the server fails.
@@ -68,10 +72,16 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 
 	cfg, err := loadConfig(getenv)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return fmt.Errorf("invalid configuration:\n%w", err)
 	}
 
-	wh, err := webhook.NewHandler(cfg.verifyToken, cfg.appSecret, logProcessor(logger), logger)
+	client := cloudapi.NewClient(cfg.accessToken, cfg.apiVersion)
+	b := bot.New(client, reply, bot.Config{
+		PhoneNumberID: cfg.phoneNumberID,
+		Logger:        logger,
+	})
+
+	wh, err := webhook.NewHandler(cfg.verifyToken, cfg.appSecret, b, logger)
 	if err != nil {
 		return err
 	}
@@ -93,18 +103,22 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}()
 
 	select {
-	case err := <-serveErr:
-		return fmt.Errorf("listen: %w", err)
+	case err = <-serveErr:
+		err = fmt.Errorf("listen: %w", err)
 	case <-ctx.Done():
+		logger.Info("shutting down")
 	}
 
-	logger.Info("shutting down")
+	// Stop accepting webhooks first, then let the bot finish queued messages.
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	if serr := srv.Shutdown(shutdownCtx); serr != nil {
+		err = errors.Join(err, fmt.Errorf("shutdown server: %w", serr))
 	}
-	return nil
+	if berr := b.Shutdown(shutdownCtx); berr != nil {
+		err = errors.Join(err, fmt.Errorf("shutdown bot: %w", berr))
+	}
+	return err
 }
 
 func newMux(wh *webhook.Handler) *http.ServeMux {
@@ -117,44 +131,25 @@ func newMux(wh *webhook.Handler) *http.ServeMux {
 	return mux
 }
 
-// logProcessor logs inbound messages and status updates. Replace it with
-// your own business logic.
-func logProcessor(logger *slog.Logger) webhook.Processor {
-	return webhook.ProcessorFunc(func(ctx context.Context, n *webhook.Notification) error {
-		for _, entry := range n.Entry {
-			for _, change := range entry.Changes {
-				if change.Field != webhook.FieldMessages {
-					logger.InfoContext(ctx, "unhandled change", "field", change.Field, "waba_id", entry.ID)
-					continue
-				}
-				v, err := change.Messages()
-				if err != nil {
-					// A malformed value won't fix itself on retry, so log and move on.
-					logger.ErrorContext(ctx, "decode change", "error", err)
-					continue
-				}
-				for _, m := range v.Messages {
-					attrs := []any{
-						"phone_number_id", v.Metadata.PhoneNumberID,
-						"from", m.From,
-						"id", m.ID,
-						"type", m.Type,
-					}
-					if m.Text != nil {
-						attrs = append(attrs, "text", m.Text.Body)
-					}
-					logger.InfoContext(ctx, "message received", attrs...)
-				}
-				for _, s := range v.Statuses {
-					logger.InfoContext(ctx, "status update",
-						"phone_number_id", v.Metadata.PhoneNumberID,
-						"id", s.ID,
-						"status", s.Status,
-						"recipient_id", s.RecipientID,
-					)
-				}
-			}
+// reply is the bot's conversation logic. It echoes text messages; replace it
+// with your own (call an LLM, look up an order, etc.).
+func reply(_ context.Context, in bot.Incoming) ([]cloudapi.Message, error) {
+	m := in.Message
+	switch m.Type {
+	case webhook.MessageTypeText:
+		return []cloudapi.Message{cloudapi.TextMessage("You said: " + m.Text.Body)}, nil
+	case webhook.MessageTypeInteractive:
+		if m.Interactive.ButtonReply != nil {
+			return []cloudapi.Message{cloudapi.TextMessage("You picked: " + m.Interactive.ButtonReply.Title)}, nil
 		}
-		return nil
-	})
+		if m.Interactive.ListReply != nil {
+			return []cloudapi.Message{cloudapi.TextMessage("You picked: " + m.Interactive.ListReply.Title)}, nil
+		}
+	case webhook.MessageTypeReaction, webhook.MessageTypeSystem:
+		return nil, nil // nothing to answer
+	}
+	return []cloudapi.Message{
+		cloudapi.ReactionMessage(m.ID, "👀"),
+		cloudapi.TextMessage("Sorry, I can only read text messages for now."),
+	}, nil
 }
