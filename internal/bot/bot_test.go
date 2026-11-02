@@ -262,27 +262,49 @@ type sent struct {
 }
 
 type fakeSender struct {
-	mu   sync.Mutex
-	read []string
-	sent []sent
+	mu      sync.Mutex
+	read    []string
+	typing  []bool
+	sent    []sent
+	msgs    []cloudapi.Message
+	sendErr error
 }
 
-func (f *fakeSender) Send(_ context.Context, phoneNumberID, to string, msg cloudapi.Message) (*cloudapi.SendResponse, error) {
+func (f *fakeSender) Send(ctx context.Context, phoneNumberID, to string, msg cloudapi.Message) (*cloudapi.SendResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.sent = append(f.sent, sent{phoneNumberID, to, msg.Text.Body})
+	if f.sendErr != nil {
+		return nil, f.sendErr
+	}
+	body := ""
+	if msg.Text != nil {
+		body = msg.Text.Body
+	}
+	f.sent = append(f.sent, sent{phoneNumberID, to, body})
+	f.msgs = append(f.msgs, msg)
 	return &cloudapi.SendResponse{}, nil
 }
 
-func (f *fakeSender) MarkRead(_ context.Context, _, messageID string, _ bool) error {
+func (f *fakeSender) MarkRead(ctx context.Context, _, messageID string, typing bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.read = append(f.read, messageID)
+	f.typing = append(f.typing, typing)
 	return nil
 }
 
-func echo(_ context.Context, in Incoming) ([]cloudapi.Message, error) {
-	return []cloudapi.Message{cloudapi.TextMessage(in.Contact.Profile.Name + ": " + in.Message.Text.Body)}, nil
+func echo(c *Context) error {
+	name := c.Contact.Profile.Name
+	if name != "" {
+		return c.Reply(name + ": " + c.Message.Text)
+	}
+	return c.Reply(c.Message.Text)
 }
 
 func postNotification(t *testing.T, b *Bot, phoneID string, msgs ...[3]string) *httptest.ResponseRecorder {
@@ -297,7 +319,7 @@ func postNotification(t *testing.T, b *Bot, phoneID string, msgs ...[3]string) *
 	for _, m := range msgs {
 		v.Contacts = append(v.Contacts, Contact{WaID: m[0], Profile: Profile{Name: "name-" + m[0]}})
 		v.Messages = append(v.Messages, wireMessage{
-			From: m[0], ID: m[1], Type: string(MessageTypeText), Text: &Text{Body: m[2]},
+			From: m[0], ID: m[1], Type: string(MessageTypeText), Text: &wireText{Body: m[2]},
 		})
 	}
 	raw, err := json.Marshal(v)
@@ -380,8 +402,8 @@ func TestIgnoresDuplicateDeliveries(t *testing.T) {
 
 func TestPreservesPerUserOrder(t *testing.T) {
 	s := &fakeSender{}
-	b := newTestBot(t, s, func(_ context.Context, in Incoming) ([]cloudapi.Message, error) {
-		return []cloudapi.Message{cloudapi.TextMessage(in.Message.Text.Body)}, nil
+	b := newTestBot(t, s, func(c *Context) error {
+		return c.Reply(c.Message.Text)
 	}, Config{Workers: 8})
 
 	var want []string
@@ -407,9 +429,9 @@ func TestPreservesPerUserOrder(t *testing.T) {
 func TestQueueFullRejectsAndAllowsRedelivery(t *testing.T) {
 	release := make(chan struct{})
 	s := &fakeSender{}
-	b := newTestBot(t, s, func(ctx context.Context, in Incoming) ([]cloudapi.Message, error) {
+	b := newTestBot(t, s, func(c *Context) error {
 		<-release
-		return nil, nil
+		return nil
 	}, Config{Workers: 1, QueueSize: 1})
 	defer func() { close(release); shutdown(t, b) }()
 
@@ -439,9 +461,9 @@ func TestProcessAfterShutdown(t *testing.T) {
 }
 
 func TestShutdownTimeoutCancelsHandlers(t *testing.T) {
-	b := newTestBot(t, &fakeSender{}, func(ctx context.Context, in Incoming) ([]cloudapi.Message, error) {
-		<-ctx.Done()
-		return nil, ctx.Err()
+	b := newTestBot(t, &fakeSender{}, func(c *Context) error {
+		<-c.Done()
+		return c.Err()
 	}, Config{})
 	_ = postNotification(t, b, "", [3]string{"1", "a", "x"})
 
@@ -454,11 +476,11 @@ func TestShutdownTimeoutCancelsHandlers(t *testing.T) {
 
 func TestRecoversFromHandlerPanic(t *testing.T) {
 	s := &fakeSender{}
-	b := newTestBot(t, s, func(ctx context.Context, in Incoming) ([]cloudapi.Message, error) {
-		if in.Message.ID == "boom" {
+	b := newTestBot(t, s, func(c *Context) error {
+		if c.Message.ID == "boom" {
 			panic("boom")
 		}
-		return echo(ctx, in)
+		return echo(c)
 	}, Config{Workers: 1})
 
 	_ = postNotification(t, b, "", [3]string{"1", "boom", "x"})
@@ -481,6 +503,140 @@ func TestDedupExpires(t *testing.T) {
 	now = now.Add(2 * time.Hour)
 	if !d.add("x") {
 		t.Error("add rejected id after TTL")
+	}
+}
+
+func TestInteractiveRepliesMapping(t *testing.T) {
+	buttonPayload := `{
+  "object": "whatsapp_business_account",
+  "entry": [{
+    "id": "102290129340398",
+    "changes": [{
+      "field": "messages",
+      "value": {
+        "messaging_product": "whatsapp",
+        "metadata": {"display_phone_number": "15550783881", "phone_number_id": "PNID"},
+        "contacts": [{"profile": {"name": "Bob"}, "wa_id": "16505559999"}],
+        "messages": [{
+          "from": "16505559999",
+          "id": "wamid.btn1",
+          "timestamp": "1749416383",
+          "type": "interactive",
+          "interactive": {
+            "type": "button_reply",
+            "button_reply": {"id": "btn_yes", "title": "Yes, please"}
+          }
+        }]
+      }
+    }]
+  }]
+}`
+
+	listPayload := `{
+  "object": "whatsapp_business_account",
+  "entry": [{
+    "id": "102290129340398",
+    "changes": [{
+      "field": "messages",
+      "value": {
+        "messaging_product": "whatsapp",
+        "metadata": {"display_phone_number": "15550783881", "phone_number_id": "PNID"},
+        "contacts": [{"profile": {"name": "Alice"}, "wa_id": "16505558888"}],
+        "messages": [{
+          "from": "16505558888",
+          "id": "wamid.list1",
+          "timestamp": "1749416383",
+          "type": "interactive",
+          "interactive": {
+            "type": "list_reply",
+            "list_reply": {"id": "opt_2", "title": "Option Two"}
+          }
+        }]
+      }
+    }]
+  }]
+}`
+
+	var received []Message
+	var mu sync.Mutex
+	handler := func(c *Context) error {
+		mu.Lock()
+		received = append(received, c.Message)
+		mu.Unlock()
+		return c.Reply("You picked: " + c.Message.Text)
+	}
+
+	s := &fakeSender{}
+	b := newTestBot(t, s, handler, Config{})
+	defer shutdown(t, b)
+
+	for _, payload := range []string{buttonPayload, listPayload} {
+		req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+		req.Header.Set("X-Hub-Signature-256", sign(testAppSecret, payload))
+		rec := httptest.NewRecorder()
+		b.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+	}
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) == 2
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if received[0].ID != "wamid.btn1" || received[0].Type != "interactive" || received[0].Text != "Yes, please" {
+		t.Errorf("button message = %+v, want Type=interactive Text='Yes, please'", received[0])
+	}
+	if received[1].ID != "wamid.list1" || received[1].Type != "interactive" || received[1].Text != "Option Two" {
+		t.Errorf("list message = %+v, want Type=interactive Text='Option Two'", received[1])
+	}
+
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.sent) == 2
+	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sent[0].body != "You picked: Yes, please" {
+		t.Errorf("sent[0].body = %q, want 'You picked: Yes, please'", s.sent[0].body)
+	}
+	if s.sent[1].body != "You picked: Option Two" {
+		t.Errorf("sent[1].body = %q, want 'You picked: Option Two'", s.sent[1].body)
+	}
+}
+
+func TestWorkerMarksReadWithTypingBeforeHandler(t *testing.T) {
+	s := &fakeSender{}
+	var readBeforeHandler bool
+
+	handler := func(c *Context) error {
+		s.mu.Lock()
+		readBeforeHandler = len(s.read) == 1 && s.read[0] == c.Message.ID && len(s.typing) == 1 && s.typing[0]
+		s.mu.Unlock()
+		return c.Reply("done")
+	}
+
+	b := newTestBot(t, s, handler, Config{})
+	defer shutdown(t, b)
+
+	rec := postNotification(t, b, "", [3]string{"111", "wamid.order1", "status"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.sent) == 1
+	})
+
+	if !readBeforeHandler {
+		t.Error("expected MarkRead with typing indicator to be called before Handler execution")
 	}
 }
 

@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/chachin/wagot/internal/bot"
-	"github.com/chachin/wagot/internal/cloudapi"
 	"github.com/chachin/wagot/internal/dotenv"
 )
 
@@ -74,11 +73,12 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		return fmt.Errorf("invalid configuration:\n%w", err)
 	}
 
-	client := cloudapi.NewClient(cfg.accessToken, cfg.apiVersion)
-	b, err := bot.New(client, reply, bot.Config{
+	b, err := bot.New(nil, reply, bot.Config{
 		PhoneNumberID: cfg.phoneNumberID,
 		VerifyToken:   cfg.verifyToken,
 		AppSecret:     cfg.appSecret,
+		AccessToken:   cfg.accessToken,
+		APIVersion:    cfg.apiVersion,
 		Logger:        logger,
 	})
 	if err != nil {
@@ -131,23 +131,18 @@ func newMux(b *bot.Bot) *http.ServeMux {
 
 // reply is the bot's conversation logic. It echoes text messages; replace it
 // with your own (call an LLM, look up an order, etc.).
-func reply(_ context.Context, in bot.Incoming) ([]cloudapi.Message, error) {
-	m := in.Message
-	switch m.Type {
+func reply(c *bot.Context) error {
+	switch c.Message.Type {
 	case bot.MessageTypeText:
-		return []cloudapi.Message{cloudapi.TextMessage("You said: " + m.Text.Body)}, nil
+		return c.Reply("You said: " + c.Message.Text)
 	case bot.MessageTypeInteractive:
-		if m.Interactive.ButtonReply != nil {
-			return []cloudapi.Message{cloudapi.TextMessage("You picked: " + m.Interactive.ButtonReply.Title)}, nil
-		}
-		if m.Interactive.ListReply != nil {
-			return []cloudapi.Message{cloudapi.TextMessage("You picked: " + m.Interactive.ListReply.Title)}, nil
-		}
+		return c.Reply("You picked: " + c.Message.Text)
 	case bot.MessageTypeReaction, bot.MessageTypeSystem:
-		return nil, nil // nothing to answer
+		return nil // nothing to answer
+	default:
+		if err := c.React("👀"); err != nil {
+			return err
+		}
+		return c.Reply("Sorry, I can only read text messages for now.")
 	}
-	return []cloudapi.Message{
-		cloudapi.ReactionMessage(m.ID, "👀"),
-		cloudapi.TextMessage("Sorry, I can only read text messages for now."),
-	}, nil
 }

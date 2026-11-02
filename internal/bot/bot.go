@@ -2,7 +2,7 @@
 // the Cloud API.
 //
 // Bot implements http.Handler. ServeHTTP handles the Meta verification handshake
-// on GET and validates signatures, unmarshals payloads, and queues inbound
+// on GET and validates signatures, unmarshals payloads, and queues incoming
 // messages on POST so the webhook is acknowledged immediately, as Meta
 // requires. A pool of workers then marks each message as read, calls your
 // [Handler], and sends its replies. Messages from the same user always go to
@@ -21,6 +21,9 @@ import (
 	"github.com/chachin/wagot/internal/cloudapi"
 )
 
+// DefaultAPIVersion is the default Meta Graph API version used by wagot.
+const DefaultAPIVersion = "v26.0"
+
 // ErrQueueFull is returned when a worker's queue is full.
 var ErrQueueFull = errors.New("bot: queue full")
 
@@ -34,8 +37,8 @@ type Sender interface {
 	MarkRead(ctx context.Context, phoneNumberID, messageID string, typing bool) error
 }
 
-// Incoming is an inbound message together with what's needed to answer it.
-type Incoming struct {
+// incoming is an incoming message together with what's needed to answer it.
+type incoming struct {
 	// PhoneNumberID is the business phone number that received the message.
 	// Replies are sent from it.
 	PhoneNumberID string
@@ -44,9 +47,8 @@ type Incoming struct {
 	Message Message
 }
 
-// Handler decides how to answer an inbound message. The returned messages are
-// sent, in order, to the user who sent it. Return no messages to stay silent.
-type Handler func(ctx context.Context, in Incoming) ([]cloudapi.Message, error)
+// Handler evaluates an incoming message and decides which replies or reactions to emit.
+type Handler func(c *Context) error
 
 // Config configures a Bot. Zero values select the defaults.
 type Config struct {
@@ -60,6 +62,12 @@ type Config struct {
 	// Account are ignored. Empty accepts every number.
 	PhoneNumberID string
 
+	// AccessToken is the Meta Cloud API access token. If provided and Sender is nil
+	// in New, a Cloud API client is automatically created.
+	AccessToken string
+	// APIVersion is the Graph API version (default DefaultAPIVersion).
+	APIVersion string
+
 	Workers        int           // default 4
 	QueueSize      int           // per worker; default 64
 	HandlerTimeout time.Duration // per message, including API calls; default 60s
@@ -67,7 +75,7 @@ type Config struct {
 	Logger         *slog.Logger  // default discards logs
 }
 
-// Bot processes inbound messages. Create it with New.
+// Bot processes incoming messages. Create it with New.
 type Bot struct {
 	sender        Sender
 	handler       Handler
@@ -80,7 +88,7 @@ type Bot struct {
 
 	mu     sync.RWMutex // guards closed and sends on queues
 	closed bool
-	queues []chan Incoming
+	queues []chan incoming
 	wg     sync.WaitGroup
 
 	// ctx is cancelled if Shutdown gives up waiting, aborting in-flight work.
@@ -90,6 +98,14 @@ type Bot struct {
 
 // New creates a Bot and starts its workers. Call Shutdown to stop them.
 func New(sender Sender, handler Handler, cfg Config) (*Bot, error) {
+	if sender == nil && cfg.AccessToken != "" {
+		apiVersion := cfg.APIVersion
+		if apiVersion == "" {
+			apiVersion = DefaultAPIVersion
+		}
+		sender = cloudapi.NewClient(cfg.AccessToken, apiVersion)
+	}
+
 	switch {
 	case sender == nil:
 		return nil, errors.New("bot: sender is required")
@@ -127,12 +143,12 @@ func New(sender Sender, handler Handler, cfg Config) (*Bot, error) {
 		timeout:       cfg.HandlerTimeout,
 		logger:        cfg.Logger,
 		seen:          newDedup(cfg.DedupTTL),
-		queues:        make([]chan Incoming, cfg.Workers),
+		queues:        make([]chan incoming, cfg.Workers),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
 	for i := range b.queues {
-		q := make(chan Incoming, cfg.QueueSize)
+		q := make(chan incoming, cfg.QueueSize)
 		b.queues[i] = q
 		b.wg.Go(func() { b.work(q) })
 	}
@@ -140,7 +156,7 @@ func New(sender Sender, handler Handler, cfg Config) (*Bot, error) {
 }
 
 // enqueue must be called with b.mu read-locked.
-func (b *Bot) enqueue(in Incoming) error {
+func (b *Bot) enqueue(in incoming) error {
 	if !b.seen.add(in.Message.ID) {
 		b.logger.Debug("skipping duplicate message", "id", in.Message.ID)
 		return nil
@@ -183,13 +199,13 @@ func (b *Bot) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (b *Bot) work(q <-chan Incoming) {
+func (b *Bot) work(q <-chan incoming) {
 	for in := range q {
 		b.handle(in)
 	}
 }
 
-func (b *Bot) handle(in Incoming) {
+func (b *Bot) handle(in incoming) {
 	ctx, cancel := context.WithTimeout(b.ctx, b.timeout)
 	defer cancel()
 	logger := b.logger.With("message_id", in.Message.ID, "from", in.Message.From)
@@ -200,23 +216,28 @@ func (b *Bot) handle(in Incoming) {
 		}
 	}()
 
+	phoneID := in.PhoneNumberID
+	if phoneID == "" {
+		phoneID = b.phoneNumberID
+	}
+
 	// Mark read and show "typing…" while the handler works. Not fatal.
-	if err := b.sender.MarkRead(ctx, in.PhoneNumberID, in.Message.ID, true); err != nil {
+	if err := b.sender.MarkRead(ctx, phoneID, in.Message.ID, true); err != nil {
 		logger.WarnContext(ctx, "mark read", "error", err)
 	}
 
-	replies, err := b.handler(ctx, in)
-	if err != nil {
+	c := &Context{
+		Context:       ctx,
+		Message:       in.Message,
+		Contact:       in.Contact,
+		sender:        b.sender,
+		phoneNumberID: phoneID,
+		logger:        logger,
+	}
+
+	if err := b.handler(c); err != nil {
 		logger.ErrorContext(ctx, "handler", "error", err)
 		return
-	}
-	for _, r := range replies {
-		resp, err := b.sender.Send(ctx, in.PhoneNumberID, in.Message.From, r)
-		if err != nil {
-			logger.ErrorContext(ctx, "send reply", "error", err)
-			return
-		}
-		logger.InfoContext(ctx, "reply sent", "reply_id", resp.MessageID(), "type", r.Type)
 	}
 }
 

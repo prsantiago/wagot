@@ -24,64 +24,48 @@ const (
 )
 
 // MessageType identifies the kind of content in a Message.
-type MessageType string
+type MessageType = string
 
 // Message types sent by the WhatsApp Business Platform.
 const (
-	MessageTypeText        MessageType = "text"
-	MessageTypeImage       MessageType = "image"
-	MessageTypeAudio       MessageType = "audio"
-	MessageTypeVideo       MessageType = "video"
-	MessageTypeDocument    MessageType = "document"
-	MessageTypeSticker     MessageType = "sticker"
-	MessageTypeLocation    MessageType = "location"
-	MessageTypeContacts    MessageType = "contacts"
-	MessageTypeReaction    MessageType = "reaction"
-	MessageTypeButton      MessageType = "button"
-	MessageTypeInteractive MessageType = "interactive"
-	MessageTypeOrder       MessageType = "order"
-	MessageTypeSystem      MessageType = "system"
-	MessageTypeUnsupported MessageType = "unsupported"
+	MessageTypeText        = "text"
+	MessageTypeImage       = "image"
+	MessageTypeAudio       = "audio"
+	MessageTypeVideo       = "video"
+	MessageTypeDocument    = "document"
+	MessageTypeSticker     = "sticker"
+	MessageTypeLocation    = "location"
+	MessageTypeContacts    = "contacts"
+	MessageTypeReaction    = "reaction"
+	MessageTypeButton      = "button"
+	MessageTypeInteractive = "interactive"
+	MessageTypeOrder       = "order"
+	MessageTypeSystem      = "system"
+	MessageTypeUnsupported = "unsupported"
 )
 
-// Message is an inbound message from a WhatsApp user.
-type Message struct {
-	From        string       `json:"from"`
-	ID          string       `json:"id"`
-	Timestamp   string       `json:"timestamp"`
-	Type        MessageType  `json:"type"`
-	Text        *Text        `json:"text,omitempty"`
-	Interactive *Interactive `json:"interactive,omitempty"`
-	Reaction    *Reaction    `json:"reaction,omitempty"`
-}
-
-// Text is the content of a text message.
-type Text struct {
+type wireText struct {
 	Body string `json:"body"`
 }
 
-// Interactive is a reply to an interactive (button or list) message.
-type Interactive struct {
-	Type        string       `json:"type"`
-	ButtonReply *ButtonReply `json:"button_reply,omitempty"`
-	ListReply   *ListReply   `json:"list_reply,omitempty"`
+type wireInteractive struct {
+	Type        string           `json:"type"`
+	ButtonReply *wireButtonReply `json:"button_reply,omitempty"`
+	ListReply   *wireListReply   `json:"list_reply,omitempty"`
 }
 
-// ButtonReply is the button a user tapped.
-type ButtonReply struct {
+type wireButtonReply struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 }
 
-// ListReply is the list row a user selected.
-type ListReply struct {
+type wireListReply struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
 }
 
-// Reaction is an emoji reaction to a previous message.
-type Reaction struct {
+type wireReaction struct {
 	MessageID string `json:"message_id"`
 	Emoji     string `json:"emoji"`
 }
@@ -128,16 +112,16 @@ type wireMessage struct {
 	Timestamp   string              `json:"timestamp"`
 	Type        string              `json:"type"`
 	Context     *wireMessageContext `json:"context,omitempty"`
-	Text        *Text               `json:"text,omitempty"`
+	Text        *wireText           `json:"text,omitempty"`
 	Image       *wireMedia          `json:"image,omitempty"`
 	Audio       *wireMedia          `json:"audio,omitempty"`
 	Video       *wireMedia          `json:"video,omitempty"`
 	Document    *wireMedia          `json:"document,omitempty"`
 	Sticker     *wireMedia          `json:"sticker,omitempty"`
 	Location    *wireLocation       `json:"location,omitempty"`
-	Reaction    *Reaction           `json:"reaction,omitempty"`
+	Reaction    *wireReaction       `json:"reaction,omitempty"`
 	Button      *wireButton         `json:"button,omitempty"`
-	Interactive *Interactive        `json:"interactive,omitempty"`
+	Interactive *wireInteractive    `json:"interactive,omitempty"`
 	Errors      []wireError         `json:"errors,omitempty"`
 }
 
@@ -282,18 +266,10 @@ func (b *Bot) processNotification(ctx context.Context, n *wireNotification) erro
 				b.logWireStatus(ctx, s)
 			}
 			for _, m := range v.Messages {
-				if err := b.enqueue(Incoming{
+				if err := b.enqueue(incoming{
 					PhoneNumberID: v.Metadata.PhoneNumberID,
 					Contact:       contactFor(v.Contacts, m.From),
-					Message: Message{
-						From:        m.From,
-						ID:          m.ID,
-						Timestamp:   m.Timestamp,
-						Type:        MessageType(m.Type),
-						Text:        m.Text,
-						Interactive: m.Interactive,
-						Reaction:    m.Reaction,
-					},
+					Message:       wireToMessage(m),
 				}); err != nil {
 					return err
 				}
@@ -301,6 +277,27 @@ func (b *Bot) processNotification(ctx context.Context, n *wireNotification) erro
 		}
 	}
 	return nil
+}
+
+func wireToMessage(m wireMessage) Message {
+	text := ""
+	if m.Text != nil {
+		text = m.Text.Body
+	} else if m.Interactive != nil {
+		if m.Interactive.ButtonReply != nil {
+			text = m.Interactive.ButtonReply.Title
+		} else if m.Interactive.ListReply != nil {
+			text = m.Interactive.ListReply.Title
+		}
+	} else if m.Button != nil {
+		text = m.Button.Text
+	}
+	return Message{
+		ID:   m.ID,
+		From: m.From,
+		Type: m.Type,
+		Text: text,
+	}
 }
 
 func (b *Bot) logWireStatus(ctx context.Context, s wireStatus) {

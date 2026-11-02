@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/chachin/wagot/internal/cloudapi"
+	"github.com/chachin/wagot/internal/bot"
 )
 
 // Environment variables read by the server. Each can be set in the real
@@ -58,7 +58,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 	port := withDefault(envPort, defaultPort)
 	cfg := config{
 		addr:          net.JoinHostPort("", port),
-		apiVersion:    withDefault(envAPIVersion, cloudapi.DefaultAPIVersion),
+		apiVersion:    withDefault(envAPIVersion, bot.DefaultAPIVersion),
 		phoneNumberID: required(envPhoneNumberID),
 		accessToken:   required(envAccessToken),
 		verifyToken:   required(envVerifyToken),
