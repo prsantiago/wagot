@@ -33,7 +33,6 @@ import (
 	"github.com/chachin/wagot/internal/bot"
 	"github.com/chachin/wagot/internal/cloudapi"
 	"github.com/chachin/wagot/internal/dotenv"
-	"github.com/chachin/wagot/internal/webhook"
 )
 
 const shutdownTimeout = 30 * time.Second
@@ -76,19 +75,19 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}
 
 	client := cloudapi.NewClient(cfg.accessToken, cfg.apiVersion)
-	b := bot.New(client, reply, bot.Config{
+	b, err := bot.New(client, reply, bot.Config{
 		PhoneNumberID: cfg.phoneNumberID,
+		VerifyToken:   cfg.verifyToken,
+		AppSecret:     cfg.appSecret,
 		Logger:        logger,
 	})
-
-	wh, err := webhook.NewHandler(cfg.verifyToken, cfg.appSecret, b, logger)
 	if err != nil {
 		return err
 	}
 
 	srv := &http.Server{
 		Addr:              cfg.addr,
-		Handler:           newMux(wh),
+		Handler:           newMux(b),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -121,10 +120,9 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	return err
 }
 
-func newMux(wh *webhook.Handler) *http.ServeMux {
+func newMux(b *bot.Bot) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /webhook", wh.Verify)
-	mux.HandleFunc("POST /webhook", wh.Receive)
+	mux.Handle("/webhook", b)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -136,16 +134,16 @@ func newMux(wh *webhook.Handler) *http.ServeMux {
 func reply(_ context.Context, in bot.Incoming) ([]cloudapi.Message, error) {
 	m := in.Message
 	switch m.Type {
-	case webhook.MessageTypeText:
+	case bot.MessageTypeText:
 		return []cloudapi.Message{cloudapi.TextMessage("You said: " + m.Text.Body)}, nil
-	case webhook.MessageTypeInteractive:
+	case bot.MessageTypeInteractive:
 		if m.Interactive.ButtonReply != nil {
 			return []cloudapi.Message{cloudapi.TextMessage("You picked: " + m.Interactive.ButtonReply.Title)}, nil
 		}
 		if m.Interactive.ListReply != nil {
 			return []cloudapi.Message{cloudapi.TextMessage("You picked: " + m.Interactive.ListReply.Title)}, nil
 		}
-	case webhook.MessageTypeReaction, webhook.MessageTypeSystem:
+	case bot.MessageTypeReaction, bot.MessageTypeSystem:
 		return nil, nil // nothing to answer
 	}
 	return []cloudapi.Message{
