@@ -22,7 +22,7 @@ import (
 )
 
 // DefaultAPIVersion is the default Meta Graph API version used by wagot.
-const DefaultAPIVersion = "v26.0"
+const DefaultAPIVersion = cloudapi.DefaultAPIVersion
 
 // ErrQueueFull is returned when a worker's queue is full.
 var ErrQueueFull = errors.New("bot: queue full")
@@ -42,9 +42,8 @@ type incoming struct {
 	// PhoneNumberID is the business phone number that received the message.
 	// Replies are sent from it.
 	PhoneNumberID string
-	// Contact is the sender's profile. It may be the zero value.
-	Contact Contact
-	Message Message
+	Contact       Contact
+	Message       Message
 }
 
 // Handler evaluates an incoming message and decides which replies or reactions to emit.
@@ -239,15 +238,6 @@ func (b *Bot) handle(in incoming) {
 		logger.ErrorContext(ctx, "handler", "error", err)
 		return
 	}
-}
-
-func contactFor(contacts []Contact, waID string) Contact {
-	for _, c := range contacts {
-		if c.WaID == waID {
-			return c
-		}
-	}
-	return Contact{}
 }
 
 func shard(key string, n int) int {

@@ -12,8 +12,19 @@ import (
 type Message struct {
 	ID   string
 	From string
-	Type string
+	Type MessageType
 	Text string
+}
+
+// Contact represents the sender of an incoming WhatsApp message.
+type Contact struct {
+	Profile Profile
+	WaID    string
+}
+
+// Profile holds a WhatsApp user's profile information.
+type Profile struct {
+	Name string
 }
 
 // Context provides conversational context and outbound intent methods to a Handler.

@@ -317,7 +317,7 @@ func postNotification(t *testing.T, b *Bot, phoneID string, msgs ...[3]string) *
 		Metadata:         wireMetadata{PhoneNumberID: phoneID},
 	}
 	for _, m := range msgs {
-		v.Contacts = append(v.Contacts, Contact{WaID: m[0], Profile: Profile{Name: "name-" + m[0]}})
+		v.Contacts = append(v.Contacts, wireContact{WaID: m[0], Profile: wireProfile{Name: "name-" + m[0]}})
 		v.Messages = append(v.Messages, wireMessage{
 			From: m[0], ID: m[1], Type: string(MessageTypeText), Text: &wireText{Body: m[2]},
 		})
@@ -326,7 +326,7 @@ func postNotification(t *testing.T, b *Bot, phoneID string, msgs ...[3]string) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := wireNotification{
+	n := wirePayload{
 		Object: objectWhatsAppBusinessAccount,
 		Entry:  []wireEntry{{ID: "WABA", Changes: []wireChange{{Field: fieldMessages, Value: raw}}}},
 	}
@@ -424,6 +424,51 @@ func TestPreservesPerUserOrder(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("replies out of order: %v", got)
 	}
+}
+
+func TestDistinctSendersProcessConcurrently(t *testing.T) {
+	senderA := "user-1"
+	senderB := "user-2"
+	for shard(senderA, 2) == shard(senderB, 2) {
+		senderB += "x"
+	}
+
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	s := &fakeSender{}
+	b := newTestBot(t, s, func(c *Context) error {
+		started <- c.Message.From
+		<-release
+		return nil
+	}, Config{Workers: 2})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		shutdown(t, b)
+	}()
+
+	recA := postNotification(t, b, "", [3]string{senderA, "wamid.A", "msg A"})
+	if recA.Code != http.StatusOK {
+		t.Fatalf("status sender A = %d, want %d", recA.Code, http.StatusOK)
+	}
+	recB := postNotification(t, b, "", [3]string{senderB, "wamid.B", "msg B"})
+	if recB.Code != http.StatusOK {
+		t.Fatalf("status sender B = %d, want %d", recB.Code, http.StatusOK)
+	}
+
+	// Both handlers must enter and execute concurrently. If distinct senders
+	// were serialized, the second handler would block until the first completed.
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for concurrent handlers to start")
+		}
+	}
+	close(release)
 }
 
 func TestQueueFullRejectsAndAllowsRedelivery(t *testing.T) {

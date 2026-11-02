@@ -3,8 +3,36 @@ package bot
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 )
+
+func TestMessageTypeIsDefinedDomainType(t *testing.T) {
+	msg := Message{Type: MessageTypeText}
+	typ := reflect.TypeOf(msg.Type)
+	if typ.PkgPath() != "github.com/chachin/wagot/internal/bot" || typ.Name() != "MessageType" {
+		t.Fatalf("Message.Type is %s (pkg: %q, name: %q), want defined domain type bot.MessageType", typ, typ.PkgPath(), typ.Name())
+	}
+}
+
+func TestContextDoesNotExposeWireJSONTags(t *testing.T) {
+	ctxTyp := reflect.TypeOf(Context{})
+	for i := range ctxTyp.NumField() {
+		field := ctxTyp.Field(i)
+		if tag := field.Tag.Get("json"); tag != "" {
+			t.Errorf("Context field %q exposes json tag %q", field.Name, tag)
+		}
+		fieldType := field.Type
+		if fieldType.Kind() == reflect.Struct && fieldType.PkgPath() == "github.com/chachin/wagot/internal/bot" {
+			for j := range fieldType.NumField() {
+				subField := fieldType.Field(j)
+				if subTag := subField.Tag.Get("json"); subTag != "" {
+					t.Errorf("Context field %q (type %s) leaks wire JSON tag on %q", field.Name, fieldType.Name(), subField.Name)
+				}
+			}
+		}
+	}
+}
 
 func TestContextReply(t *testing.T) {
 	sender := &fakeSender{}
@@ -37,7 +65,7 @@ func TestContextReply(t *testing.T) {
 	if sender.sent[0].body != "Hello user" {
 		t.Errorf("sender.sent[0].body = %q, want 'Hello user'", sender.sent[0].body)
 	}
-	if len(sender.msgs) != 1 || sender.msgs[0].Type != MessageTypeText || sender.msgs[0].Text.Body != "Hello user" {
+	if len(sender.msgs) != 1 || sender.msgs[0].Type != string(MessageTypeText) || sender.msgs[0].Text.Body != "Hello user" {
 		t.Errorf("sender.msgs[0] = %+v, want TextMessage with 'Hello user'", sender.msgs[0])
 	}
 }
@@ -60,7 +88,7 @@ func TestContextReact(t *testing.T) {
 	if len(sender.msgs) != 1 {
 		t.Fatalf("len(sender.msgs) = %d, want 1", len(sender.msgs))
 	}
-	if sender.msgs[0].Type != MessageTypeReaction {
+	if sender.msgs[0].Type != string(MessageTypeReaction) {
 		t.Fatalf("msgs[0].Type = %q, want %q", sender.msgs[0].Type, MessageTypeReaction)
 	}
 	if sender.msgs[0].Reaction.Emoji != "👍" {

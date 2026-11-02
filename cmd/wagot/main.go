@@ -73,7 +73,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		return fmt.Errorf("invalid configuration:\n%w", err)
 	}
 
-	b, err := bot.New(nil, reply, bot.Config{
+	b, err := bot.New(nil, converse, bot.Config{
 		PhoneNumberID: cfg.phoneNumberID,
 		VerifyToken:   cfg.verifyToken,
 		AppSecret:     cfg.appSecret,
@@ -129,9 +129,9 @@ func newMux(b *bot.Bot) *http.ServeMux {
 	return mux
 }
 
-// reply is the bot's conversation logic. It echoes text messages; replace it
-// with your own (call an LLM, look up an order, etc.).
-func reply(c *bot.Context) error {
+// converse is the Conversational Handler. It evaluates an incoming message and
+// decides which replies or reactions to emit.
+func converse(c *bot.Context) error {
 	switch c.Message.Type {
 	case bot.MessageTypeText:
 		return c.Reply("You said: " + c.Message.Text)

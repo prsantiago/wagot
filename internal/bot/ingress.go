@@ -24,24 +24,24 @@ const (
 )
 
 // MessageType identifies the kind of content in a Message.
-type MessageType = string
+type MessageType string
 
 // Message types sent by the WhatsApp Business Platform.
 const (
-	MessageTypeText        = "text"
-	MessageTypeImage       = "image"
-	MessageTypeAudio       = "audio"
-	MessageTypeVideo       = "video"
-	MessageTypeDocument    = "document"
-	MessageTypeSticker     = "sticker"
-	MessageTypeLocation    = "location"
-	MessageTypeContacts    = "contacts"
-	MessageTypeReaction    = "reaction"
-	MessageTypeButton      = "button"
-	MessageTypeInteractive = "interactive"
-	MessageTypeOrder       = "order"
-	MessageTypeSystem      = "system"
-	MessageTypeUnsupported = "unsupported"
+	MessageTypeText        MessageType = "text"
+	MessageTypeImage       MessageType = "image"
+	MessageTypeAudio       MessageType = "audio"
+	MessageTypeVideo       MessageType = "video"
+	MessageTypeDocument    MessageType = "document"
+	MessageTypeSticker     MessageType = "sticker"
+	MessageTypeLocation    MessageType = "location"
+	MessageTypeContacts    MessageType = "contacts"
+	MessageTypeReaction    MessageType = "reaction"
+	MessageTypeButton      MessageType = "button"
+	MessageTypeInteractive MessageType = "interactive"
+	MessageTypeOrder       MessageType = "order"
+	MessageTypeSystem      MessageType = "system"
+	MessageTypeUnsupported MessageType = "unsupported"
 )
 
 type wireText struct {
@@ -70,19 +70,17 @@ type wireReaction struct {
 	Emoji     string `json:"emoji"`
 }
 
-// Contact is the WhatsApp user who sent a message.
-type Contact struct {
-	Profile Profile `json:"profile"`
-	WaID    string  `json:"wa_id"`
+type wireContact struct {
+	Profile wireProfile `json:"profile"`
+	WaID    string      `json:"wa_id"`
 }
 
-// Profile holds a WhatsApp user's public profile data.
-type Profile struct {
+type wireProfile struct {
 	Name string `json:"name"`
 }
 
 // Unexported wire structs for decoding Meta's webhook envelope.
-type wireNotification struct {
+type wirePayload struct {
 	Object string      `json:"object"`
 	Entry  []wireEntry `json:"entry"`
 }
@@ -100,7 +98,7 @@ type wireChange struct {
 type wireMessagesValue struct {
 	MessagingProduct string        `json:"messaging_product"`
 	Metadata         wireMetadata  `json:"metadata"`
-	Contacts         []Contact     `json:"contacts,omitempty"`
+	Contacts         []wireContact `json:"contacts,omitempty"`
 	Messages         []wireMessage `json:"messages,omitempty"`
 	Statuses         []wireStatus  `json:"statuses,omitempty"`
 	Errors           []wireError   `json:"errors,omitempty"`
@@ -216,35 +214,35 @@ func (b *Bot) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var n wireNotification
-	if err := json.Unmarshal(body, &n); err != nil {
+	var p wirePayload
+	if err := json.Unmarshal(body, &p); err != nil {
 		b.logger.ErrorContext(ctx, "decode webhook payload", "error", err)
 		http.Error(w, "malformed payload", http.StatusBadRequest)
 		return
 	}
 
-	if n.Object != objectWhatsAppBusinessAccount {
-		b.logger.InfoContext(ctx, "ignoring webhook for unsupported object", "object", n.Object)
+	if p.Object != objectWhatsAppBusinessAccount {
+		b.logger.InfoContext(ctx, "ignoring webhook for unsupported object", "object", p.Object)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	if err := b.processNotification(ctx, &n); err != nil {
-		b.logger.ErrorContext(ctx, "process webhook", "error", err)
+	if err := b.dispatchPayload(ctx, &p); err != nil {
+		b.logger.ErrorContext(ctx, "dispatch webhook", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
-func (b *Bot) processNotification(ctx context.Context, n *wireNotification) error {
+func (b *Bot) dispatchPayload(ctx context.Context, p *wirePayload) error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.closed {
 		return ErrClosed
 	}
 
-	for _, entry := range n.Entry {
+	for _, entry := range p.Entry {
 		for _, change := range entry.Changes {
 			if change.Field != fieldMessages {
 				continue
@@ -268,7 +266,7 @@ func (b *Bot) processNotification(ctx context.Context, n *wireNotification) erro
 			for _, m := range v.Messages {
 				if err := b.enqueue(incoming{
 					PhoneNumberID: v.Metadata.PhoneNumberID,
-					Contact:       contactFor(v.Contacts, m.From),
+					Contact:       wireToContact(v.Contacts, m.From),
 					Message:       wireToMessage(m),
 				}); err != nil {
 					return err
@@ -277,6 +275,18 @@ func (b *Bot) processNotification(ctx context.Context, n *wireNotification) erro
 		}
 	}
 	return nil
+}
+
+func wireToContact(contacts []wireContact, waID string) Contact {
+	for _, c := range contacts {
+		if c.WaID == waID {
+			return Contact{
+				WaID:    c.WaID,
+				Profile: Profile{Name: c.Profile.Name},
+			}
+		}
+	}
+	return Contact{}
 }
 
 func wireToMessage(m wireMessage) Message {
@@ -295,7 +305,7 @@ func wireToMessage(m wireMessage) Message {
 	return Message{
 		ID:   m.ID,
 		From: m.From,
-		Type: m.Type,
+		Type: MessageType(m.Type),
 		Text: text,
 	}
 }
