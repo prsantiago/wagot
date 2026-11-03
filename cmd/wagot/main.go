@@ -31,9 +31,7 @@ import (
 	"time"
 
 	"github.com/chachin/wagot/internal/bot"
-	"github.com/chachin/wagot/internal/cloudapi"
 	"github.com/chachin/wagot/internal/dotenv"
-	"github.com/chachin/wagot/internal/webhook"
 )
 
 const shutdownTimeout = 30 * time.Second
@@ -75,20 +73,21 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		return fmt.Errorf("invalid configuration:\n%w", err)
 	}
 
-	client := cloudapi.NewClient(cfg.accessToken, cfg.apiVersion)
-	b := bot.New(client, reply, bot.Config{
+	b, err := bot.New(nil, converse, bot.Config{
 		PhoneNumberID: cfg.phoneNumberID,
+		VerifyToken:   cfg.verifyToken,
+		AppSecret:     cfg.appSecret,
+		AccessToken:   cfg.accessToken,
+		APIVersion:    cfg.apiVersion,
 		Logger:        logger,
 	})
-
-	wh, err := webhook.NewHandler(cfg.verifyToken, cfg.appSecret, b, logger)
 	if err != nil {
 		return err
 	}
 
 	srv := &http.Server{
 		Addr:              cfg.addr,
-		Handler:           newMux(wh),
+		Handler:           newMux(b),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -121,35 +120,29 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	return err
 }
 
-func newMux(wh *webhook.Handler) *http.ServeMux {
+func newMux(b *bot.Bot) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /webhook", wh.Verify)
-	mux.HandleFunc("POST /webhook", wh.Receive)
+	mux.Handle("/webhook", b)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	return mux
 }
 
-// reply is the bot's conversation logic. It echoes text messages; replace it
-// with your own (call an LLM, look up an order, etc.).
-func reply(_ context.Context, in bot.Incoming) ([]cloudapi.Message, error) {
-	m := in.Message
-	switch m.Type {
-	case webhook.MessageTypeText:
-		return []cloudapi.Message{cloudapi.TextMessage("You said: " + m.Text.Body)}, nil
-	case webhook.MessageTypeInteractive:
-		if m.Interactive.ButtonReply != nil {
-			return []cloudapi.Message{cloudapi.TextMessage("You picked: " + m.Interactive.ButtonReply.Title)}, nil
+// converse is the Conversational Handler. It evaluates an incoming message and
+// decides which replies or reactions to emit.
+func converse(c *bot.Context) error {
+	switch c.Message.Type {
+	case bot.MessageTypeText:
+		return c.Reply("You said: " + c.Message.Text)
+	case bot.MessageTypeInteractive:
+		return c.Reply("You picked: " + c.Message.Text)
+	case bot.MessageTypeReaction, bot.MessageTypeSystem:
+		return nil // nothing to answer
+	default:
+		if err := c.React("👀"); err != nil {
+			return err
 		}
-		if m.Interactive.ListReply != nil {
-			return []cloudapi.Message{cloudapi.TextMessage("You picked: " + m.Interactive.ListReply.Title)}, nil
-		}
-	case webhook.MessageTypeReaction, webhook.MessageTypeSystem:
-		return nil, nil // nothing to answer
+		return c.Reply("Sorry, I can only read text messages for now.")
 	}
-	return []cloudapi.Message{
-		cloudapi.ReactionMessage(m.ID, "👀"),
-		cloudapi.TextMessage("Sorry, I can only read text messages for now."),
-	}, nil
 }

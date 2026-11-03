@@ -1,8 +1,9 @@
 // Package bot turns verified webhook notifications into replies sent through
 // the Cloud API.
 //
-// Bot implements [webhook.Processor]. Process only de-duplicates and enqueues
-// inbound messages, so the webhook is acknowledged immediately, as Meta
+// Bot implements http.Handler. ServeHTTP handles the Meta verification handshake
+// on GET and validates signatures, unmarshals payloads, and queues incoming
+// messages on POST so the webhook is acknowledged immediately, as Meta
 // requires. A pool of workers then marks each message as read, calls your
 // [Handler], and sends its replies. Messages from the same user always go to
 // the same worker, so each conversation is handled in order.
@@ -18,14 +19,15 @@ import (
 	"time"
 
 	"github.com/chachin/wagot/internal/cloudapi"
-	"github.com/chachin/wagot/internal/webhook"
 )
 
-// ErrQueueFull is returned by Process when a worker's queue is full. The
-// webhook then responds 500 and Meta redelivers later.
+// DefaultAPIVersion is the default Meta Graph API version used by wagot.
+const DefaultAPIVersion = cloudapi.DefaultAPIVersion
+
+// ErrQueueFull is returned when a worker's queue is full.
 var ErrQueueFull = errors.New("bot: queue full")
 
-// ErrClosed is returned by Process after Shutdown has been called.
+// ErrClosed is returned when the bot has been shut down.
 var ErrClosed = errors.New("bot: shut down")
 
 // Sender is the part of the Cloud API the bot needs. *cloudapi.Client
@@ -35,26 +37,35 @@ type Sender interface {
 	MarkRead(ctx context.Context, phoneNumberID, messageID string, typing bool) error
 }
 
-// Incoming is an inbound message together with what's needed to answer it.
-type Incoming struct {
+// incoming is an incoming message together with what's needed to answer it.
+type incoming struct {
 	// PhoneNumberID is the business phone number that received the message.
 	// Replies are sent from it.
 	PhoneNumberID string
-	// Contact is the sender's profile. It may be the zero value.
-	Contact webhook.Contact
-	Message webhook.Message
+	Contact       Contact
+	Message       Message
 }
 
-// Handler decides how to answer an inbound message. The returned messages are
-// sent, in order, to the user who sent it. Return no messages to stay silent.
-type Handler func(ctx context.Context, in Incoming) ([]cloudapi.Message, error)
+// Handler evaluates an incoming message and decides which replies or reactions to emit.
+type Handler func(c *Context) error
 
 // Config configures a Bot. Zero values select the defaults.
 type Config struct {
+	// VerifyToken is the webhook verification token configured in the Meta App Dashboard.
+	VerifyToken string
+	// AppSecret is the Meta App Secret used to verify payload signatures.
+	AppSecret string
+
 	// PhoneNumberID restricts the bot to messages sent to this business phone
 	// number; notifications for other numbers on the same WhatsApp Business
 	// Account are ignored. Empty accepts every number.
 	PhoneNumberID string
+
+	// AccessToken is the Meta Cloud API access token. If provided and Sender is nil
+	// in New, a Cloud API client is automatically created.
+	AccessToken string
+	// APIVersion is the Graph API version (default DefaultAPIVersion).
+	APIVersion string
 
 	Workers        int           // default 4
 	QueueSize      int           // per worker; default 64
@@ -63,10 +74,12 @@ type Config struct {
 	Logger         *slog.Logger  // default discards logs
 }
 
-// Bot processes inbound messages. Create it with New.
+// Bot processes incoming messages. Create it with New.
 type Bot struct {
 	sender        Sender
 	handler       Handler
+	verifyToken   string
+	appSecret     []byte
 	phoneNumberID string
 	timeout       time.Duration
 	logger        *slog.Logger
@@ -74,7 +87,7 @@ type Bot struct {
 
 	mu     sync.RWMutex // guards closed and sends on queues
 	closed bool
-	queues []chan Incoming
+	queues []chan incoming
 	wg     sync.WaitGroup
 
 	// ctx is cancelled if Shutdown gives up waiting, aborting in-flight work.
@@ -83,7 +96,26 @@ type Bot struct {
 }
 
 // New creates a Bot and starts its workers. Call Shutdown to stop them.
-func New(sender Sender, handler Handler, cfg Config) *Bot {
+func New(sender Sender, handler Handler, cfg Config) (*Bot, error) {
+	if sender == nil && cfg.AccessToken != "" {
+		apiVersion := cfg.APIVersion
+		if apiVersion == "" {
+			apiVersion = DefaultAPIVersion
+		}
+		sender = cloudapi.NewClient(cfg.AccessToken, apiVersion)
+	}
+
+	switch {
+	case sender == nil:
+		return nil, errors.New("bot: sender is required")
+	case handler == nil:
+		return nil, errors.New("bot: handler is required")
+	case cfg.VerifyToken == "":
+		return nil, errors.New("bot: verify token is required")
+	case cfg.AppSecret == "":
+		return nil, errors.New("bot: app secret is required")
+	}
+
 	if cfg.Workers <= 0 {
 		cfg.Workers = 4
 	}
@@ -104,68 +136,26 @@ func New(sender Sender, handler Handler, cfg Config) *Bot {
 	b := &Bot{
 		sender:        sender,
 		handler:       handler,
+		verifyToken:   cfg.VerifyToken,
+		appSecret:     []byte(cfg.AppSecret),
 		phoneNumberID: cfg.PhoneNumberID,
 		timeout:       cfg.HandlerTimeout,
 		logger:        cfg.Logger,
 		seen:          newDedup(cfg.DedupTTL),
-		queues:        make([]chan Incoming, cfg.Workers),
+		queues:        make([]chan incoming, cfg.Workers),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
 	for i := range b.queues {
-		q := make(chan Incoming, cfg.QueueSize)
+		q := make(chan incoming, cfg.QueueSize)
 		b.queues[i] = q
 		b.wg.Go(func() { b.work(q) })
 	}
-	return b
-}
-
-// Process implements webhook.Processor. It never blocks on the Cloud API.
-func (b *Bot) Process(ctx context.Context, n *webhook.Notification) error {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if b.closed {
-		return ErrClosed
-	}
-
-	for _, entry := range n.Entry {
-		for _, change := range entry.Changes {
-			if change.Field != webhook.FieldMessages {
-				continue
-			}
-			v, err := change.Messages()
-			if err != nil {
-				// Redelivery won't fix a malformed value; drop it.
-				b.logger.ErrorContext(ctx, "decode change", "error", err)
-				continue
-			}
-			if b.phoneNumberID != "" && v.Metadata.PhoneNumberID != b.phoneNumberID {
-				b.logger.DebugContext(ctx, "ignoring change for other phone number",
-					"phone_number_id", v.Metadata.PhoneNumberID)
-				continue
-			}
-			for _, e := range v.Errors {
-				b.logger.WarnContext(ctx, "platform error", "code", e.Code, "title", e.Title)
-			}
-			for _, s := range v.Statuses {
-				b.logStatus(ctx, s)
-			}
-			for _, m := range v.Messages {
-				if err := b.enqueue(Incoming{
-					PhoneNumberID: v.Metadata.PhoneNumberID,
-					Contact:       contactFor(v.Contacts, m.From),
-					Message:       m,
-				}); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	return b, nil
 }
 
 // enqueue must be called with b.mu read-locked.
-func (b *Bot) enqueue(in Incoming) error {
+func (b *Bot) enqueue(in incoming) error {
 	if !b.seen.add(in.Message.ID) {
 		b.logger.Debug("skipping duplicate message", "id", in.Message.ID)
 		return nil
@@ -208,13 +198,13 @@ func (b *Bot) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (b *Bot) work(q <-chan Incoming) {
+func (b *Bot) work(q <-chan incoming) {
 	for in := range q {
 		b.handle(in)
 	}
 }
 
-func (b *Bot) handle(in Incoming) {
+func (b *Bot) handle(in incoming) {
 	ctx, cancel := context.WithTimeout(b.ctx, b.timeout)
 	defer cancel()
 	logger := b.logger.With("message_id", in.Message.ID, "from", in.Message.From)
@@ -225,43 +215,29 @@ func (b *Bot) handle(in Incoming) {
 		}
 	}()
 
+	phoneID := in.PhoneNumberID
+	if phoneID == "" {
+		phoneID = b.phoneNumberID
+	}
+
 	// Mark read and show "typing…" while the handler works. Not fatal.
-	if err := b.sender.MarkRead(ctx, in.PhoneNumberID, in.Message.ID, true); err != nil {
+	if err := b.sender.MarkRead(ctx, phoneID, in.Message.ID, true); err != nil {
 		logger.WarnContext(ctx, "mark read", "error", err)
 	}
 
-	replies, err := b.handler(ctx, in)
-	if err != nil {
+	c := &Context{
+		Context:       ctx,
+		Message:       in.Message,
+		Contact:       in.Contact,
+		sender:        b.sender,
+		phoneNumberID: phoneID,
+		logger:        logger,
+	}
+
+	if err := b.handler(c); err != nil {
 		logger.ErrorContext(ctx, "handler", "error", err)
 		return
 	}
-	for _, r := range replies {
-		resp, err := b.sender.Send(ctx, in.PhoneNumberID, in.Message.From, r)
-		if err != nil {
-			logger.ErrorContext(ctx, "send reply", "error", err)
-			return
-		}
-		logger.InfoContext(ctx, "reply sent", "reply_id", resp.MessageID(), "type", r.Type)
-	}
-}
-
-func (b *Bot) logStatus(ctx context.Context, s webhook.Status) {
-	attrs := []any{"id", s.ID, "status", s.Status, "recipient_id", s.RecipientID}
-	if len(s.Errors) > 0 {
-		e := s.Errors[0]
-		b.logger.WarnContext(ctx, "message failed", append(attrs, "code", e.Code, "title", e.Title)...)
-		return
-	}
-	b.logger.DebugContext(ctx, "status update", attrs...)
-}
-
-func contactFor(contacts []webhook.Contact, waID string) webhook.Contact {
-	for _, c := range contacts {
-		if c.WaID == waID {
-			return c
-		}
-	}
-	return webhook.Contact{}
 }
 
 func shard(key string, n int) int {
