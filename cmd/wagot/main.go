@@ -32,6 +32,7 @@ import (
 
 	"github.com/chachin/wagot/internal/bot"
 	"github.com/chachin/wagot/internal/dotenv"
+	"github.com/chachin/wagot/internal/flow"
 )
 
 const shutdownTimeout = 30 * time.Second
@@ -129,20 +130,5 @@ func newMux(b *bot.Bot) *http.ServeMux {
 	return mux
 }
 
-// converse is the Conversational Handler. It evaluates an incoming message and
-// decides which replies or reactions to emit.
-func converse(c *bot.Context) error {
-	switch c.Message.Type {
-	case bot.MessageTypeText:
-		return c.Reply("You said: " + c.Message.Text)
-	case bot.MessageTypeInteractive:
-		return c.Reply("You picked: " + c.Message.Text)
-	case bot.MessageTypeReaction, bot.MessageTypeSystem:
-		return nil // nothing to answer
-	default:
-		if err := c.React("👀"); err != nil {
-			return err
-		}
-		return c.Reply("Sorry, I can only read text messages for now.")
-	}
-}
+// converse is the default Conversational Handler driven by the trip agency Flow.
+var converse = flow.NewHandler()

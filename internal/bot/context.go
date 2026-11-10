@@ -10,10 +10,11 @@ import (
 
 // Message is an unnested incoming WhatsApp message provided to a conversational handler.
 type Message struct {
-	ID   string
-	From string
-	Type MessageType
-	Text string
+	ID          string
+	From        string
+	Type        MessageType
+	Text        string
+	SelectionID string
 }
 
 // Contact represents the sender of an incoming WhatsApp message.
@@ -25,6 +26,56 @@ type Contact struct {
 // Profile holds a WhatsApp user's profile information.
 type Profile struct {
 	Name string
+}
+
+// Reply is a declarative outbound reply.
+type Reply interface {
+	toCloudAPI() (cloudapi.Message, error)
+}
+
+// Text is a text reply with optional URL preview.
+type Text struct {
+	Body       string
+	PreviewURL bool
+}
+
+func (t Text) toCloudAPI() (cloudapi.Message, error) {
+	if t.Body == "" {
+		return cloudapi.Message{}, errors.New("bot: text body cannot be empty")
+	}
+	return cloudapi.TextMessageWithPreview(t.Body, t.PreviewURL), nil
+}
+
+// Button is an action button on a Button Reply.
+type Button struct {
+	ID    string
+	Title string
+}
+
+// Buttons is an interactive button reply presenting up to three buttons.
+type Buttons struct {
+	Body    string
+	Buttons []Button
+}
+
+func (b Buttons) toCloudAPI() (cloudapi.Message, error) {
+	if b.Body == "" {
+		return cloudapi.Message{}, errors.New("bot: button reply body cannot be empty")
+	}
+	if len(b.Buttons) == 0 || len(b.Buttons) > 3 {
+		return cloudapi.Message{}, errors.New("bot: button reply must have between 1 and 3 buttons")
+	}
+	cloudButtons := make([]cloudapi.Button, len(b.Buttons))
+	for i, btn := range b.Buttons {
+		if btn.ID == "" || btn.Title == "" {
+			return cloudapi.Message{}, errors.New("bot: button ID and title cannot be empty")
+		}
+		cloudButtons[i] = cloudapi.Button{
+			ID:    btn.ID,
+			Title: btn.Title,
+		}
+	}
+	return cloudapi.ButtonMessage(b.Body, cloudButtons), nil
 }
 
 // Context provides conversational context and outbound intent methods to a Handler.
@@ -50,9 +101,21 @@ func NewContext(ctx context.Context, sender Sender, phoneNumberID string, msg Me
 	}
 }
 
+// Send dispatches a declarative Reply via the Cloud API sender interface.
+func (c *Context) Send(r Reply) error {
+	if r == nil {
+		return errors.New("bot: reply is nil")
+	}
+	msg, err := r.toCloudAPI()
+	if err != nil {
+		return err
+	}
+	return c.send("reply", msg)
+}
+
 // Reply dispatches an immediate text reply via the Cloud API sender interface.
 func (c *Context) Reply(text string) error {
-	return c.send("reply", cloudapi.TextMessage(text))
+	return c.Send(Text{Body: text})
 }
 
 // React attaches an immediate emoji reaction to the incoming message ID.

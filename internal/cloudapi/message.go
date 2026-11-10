@@ -18,9 +18,44 @@ type Message struct {
 	Sticker  *Media    `json:"sticker,omitempty"`
 	Template *Template `json:"template,omitempty"`
 
-	// Interactive holds a raw interactive object (buttons, lists, flows...).
+	// Interactive holds an interactive reply object (Button Reply, List Reply).
 	// See the Cloud API reference for its schema.
-	Interactive json.RawMessage `json:"interactive,omitempty"`
+	Interactive *Interactive `json:"interactive,omitempty"`
+}
+
+// Interactive represents the payload of an interactive message (Button Reply, List Reply).
+type Interactive struct {
+	Type   string             `json:"type"`
+	Body   *InteractiveBody   `json:"body,omitempty"`
+	Action *InteractiveAction `json:"action,omitempty"`
+}
+
+// InteractiveBody contains the text body for an interactive message.
+type InteractiveBody struct {
+	Text string `json:"text"`
+}
+
+// InteractiveAction contains the interactive components (buttons, sections).
+type InteractiveAction struct {
+	Buttons []InteractiveButton `json:"buttons,omitempty"`
+}
+
+// InteractiveButton represents an action button inside an interactive Button Reply.
+type InteractiveButton struct {
+	Type  string                 `json:"type"` // always "reply" for button replies
+	Reply InteractiveButtonReply `json:"reply"`
+}
+
+// InteractiveButtonReply contains the ID and title of an interactive button.
+type InteractiveButtonReply struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// Button is an action button definition for constructing a button reply.
+type Button struct {
+	ID    string
+	Title string
 }
 
 // Context makes a message a quoted reply to MessageID.
@@ -65,6 +100,33 @@ type Language struct {
 // TextMessage returns a text message.
 func TextMessage(body string) Message {
 	return Message{Type: "text", Text: &Text{Body: body}}
+}
+
+// TextMessageWithPreview returns a text message with link preview enabled or disabled.
+func TextMessageWithPreview(body string, previewURL bool) Message {
+	return Message{Type: "text", Text: &Text{Body: body, PreviewURL: previewURL}}
+}
+
+// ButtonMessage returns an interactive button reply message.
+func ButtonMessage(body string, buttons []Button) Message {
+	interactiveButtons := make([]InteractiveButton, len(buttons))
+	for i, b := range buttons {
+		interactiveButtons[i] = InteractiveButton{
+			Type: "reply",
+			Reply: InteractiveButtonReply{
+				ID:    b.ID,
+				Title: b.Title,
+			},
+		}
+	}
+	return Message{
+		Type: "interactive",
+		Interactive: &Interactive{
+			Type:   "button",
+			Body:   &InteractiveBody{Text: body},
+			Action: &InteractiveAction{Buttons: interactiveButtons},
+		},
+	}
 }
 
 // ReactionMessage returns a reaction to messageID.

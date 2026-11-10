@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/chachin/wagot/internal/bot"
@@ -23,23 +24,32 @@ func (f *fakeSender) MarkRead(ctx context.Context, phoneNumberID, messageID stri
 
 func TestConverse(t *testing.T) {
 	tests := map[string]struct {
-		msgType   bot.MessageType
-		text      string
-		wantTypes []string
-		wantBody  string
-		wantEmoji string
+		msgType     bot.MessageType
+		text        string
+		profileName string
+		wantTypes   []string
+		wantBody    string
+		wantEmoji   string
 	}{
-		"text message": {
-			msgType:   bot.MessageTypeText,
-			text:      "Hello wagot",
-			wantTypes: []string{"text"},
-			wantBody:  "You said: Hello wagot",
+		"greeting keyword triggers personalized welcome and main menu": {
+			msgType:     bot.MessageTypeText,
+			text:        "¡Hola!",
+			profileName: "Santiago",
+			wantTypes:   []string{"text", "interactive"},
+			wantBody:    "Santiago",
 		},
-		"interactive selection": {
-			msgType:   bot.MessageTypeInteractive,
-			text:      "Option A",
-			wantTypes: []string{"text"},
-			wantBody:  "You picked: Option A",
+		"greeting keyword without profile name triggers fallback welcome and main menu": {
+			msgType:     bot.MessageTypeText,
+			text:        "menu",
+			profileName: "",
+			wantTypes:   []string{"text", "interactive"},
+			wantBody:    "Wagot Viajes",
+		},
+		"non-greeting free text triggers only main menu button reply": {
+			msgType:     bot.MessageTypeText,
+			text:        "Hello wagot",
+			profileName: "Santiago",
+			wantTypes:   []string{"interactive"},
 		},
 		"reaction is ignored": {
 			msgType:   bot.MessageTypeReaction,
@@ -56,7 +66,7 @@ func TestConverse(t *testing.T) {
 			text:      "",
 			wantTypes: []string{"reaction", "text"},
 			wantEmoji: "👀",
-			wantBody:  "Sorry, I can only read text messages for now.",
+			wantBody:  "Por el momento solo puedo leer mensajes de texto.",
 		},
 	}
 
@@ -70,6 +80,10 @@ func TestConverse(t *testing.T) {
 				Text: tc.text,
 			}
 			c := bot.NewContext(context.Background(), s, "106540352242922", msg)
+			c.Contact = bot.Contact{
+				WaID:    "15551234567",
+				Profile: bot.Profile{Name: tc.profileName},
+			}
 
 			if err := converse(c); err != nil {
 				t.Fatalf("converse() unexpected error: %v", err)
@@ -99,9 +113,16 @@ func TestConverse(t *testing.T) {
 			}
 
 			if tc.wantBody != "" {
-				lastIdx := len(s.sent) - 1
-				if s.sent[lastIdx].Text == nil || s.sent[lastIdx].Text.Body != tc.wantBody {
-					t.Errorf("reply text = %v, want %q", s.sent[lastIdx].Text, tc.wantBody)
+				// For text reply, check that body contains wantBody
+				var textBody string
+				for _, m := range s.sent {
+					if m.Type == "text" && m.Text != nil {
+						textBody = m.Text.Body
+						break
+					}
+				}
+				if !strings.Contains(textBody, tc.wantBody) {
+					t.Errorf("reply text %q does not contain %q", textBody, tc.wantBody)
 				}
 			}
 		})

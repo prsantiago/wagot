@@ -70,6 +70,79 @@ func TestSendText(t *testing.T) {
 	}
 }
 
+func TestSendTextWithPreview(t *testing.T) {
+	var got map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got = decodeBody(t, r)
+		_, _ = io.WriteString(w, `{"messaging_product":"whatsapp","messages":[{"id":"wamid.out"}]}`)
+	})
+
+	_, err := c.Send(context.Background(), "106540352242922", "16505551234", TextMessageWithPreview("https://example.com", true))
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got["type"] != "text" {
+		t.Errorf("type = %v, want text", got["type"])
+	}
+	text, _ := got["text"].(map[string]any)
+	if text["body"] != "https://example.com" || text["preview_url"] != true {
+		t.Errorf("text = %v, want body and preview_url=true", text)
+	}
+}
+
+func TestSendButtonReply(t *testing.T) {
+	var got map[string]any
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got = decodeBody(t, r)
+		_, _ = io.WriteString(w, `{"messaging_product":"whatsapp","messages":[{"id":"wamid.out"}]}`)
+	})
+
+	buttons := []Button{
+		{ID: "btn_trips", Title: "Nuestros viajes"},
+		{ID: "btn_contact", Title: "Contacto"},
+	}
+	_, err := c.Send(context.Background(), "106540352242922", "16505551234", ButtonMessage("¿En qué podemos ayudarte?", buttons))
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if got["messaging_product"] != "whatsapp" || got["recipient_type"] != "individual" || got["type"] != "interactive" {
+		t.Fatalf("unexpected envelope: %v", got)
+	}
+	interactive, ok := got["interactive"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing interactive object: %v", got)
+	}
+	if interactive["type"] != "button" {
+		t.Errorf("interactive.type = %v, want button", interactive["type"])
+	}
+	body, ok := interactive["body"].(map[string]any)
+	if !ok || body["text"] != "¿En qué podemos ayudarte?" {
+		t.Errorf("interactive.body = %v, want text", body)
+	}
+	action, ok := interactive["action"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing interactive.action: %v", interactive)
+	}
+	rawButtons, ok := action["buttons"].([]any)
+	if !ok || len(rawButtons) != 2 {
+		t.Fatalf("action.buttons = %v, want 2 buttons", action["buttons"])
+	}
+	b1, _ := rawButtons[0].(map[string]any)
+	if b1["type"] != "reply" {
+		t.Errorf("button 0 type = %v, want reply", b1["type"])
+	}
+	reply1, _ := b1["reply"].(map[string]any)
+	if reply1["id"] != "btn_trips" || reply1["title"] != "Nuestros viajes" {
+		t.Errorf("button 0 reply = %v, want btn_trips / Nuestros viajes", reply1)
+	}
+	b2, _ := rawButtons[1].(map[string]any)
+	reply2, _ := b2["reply"].(map[string]any)
+	if reply2["id"] != "btn_contact" || reply2["title"] != "Contacto" {
+		t.Errorf("button 1 reply = %v, want btn_contact / Contacto", reply2)
+	}
+}
+
 func TestMarkRead(t *testing.T) {
 	var got map[string]any
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

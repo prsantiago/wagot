@@ -602,6 +602,31 @@ func TestInteractiveRepliesMapping(t *testing.T) {
   }]
 }`
 
+	legacyButtonPayload := `{
+  "object": "whatsapp_business_account",
+  "entry": [{
+    "id": "102290129340398",
+    "changes": [{
+      "field": "messages",
+      "value": {
+        "messaging_product": "whatsapp",
+        "metadata": {"display_phone_number": "15550783881", "phone_number_id": "PNID"},
+        "contacts": [{"profile": {"name": "Charlie"}, "wa_id": "16505557777"}],
+        "messages": [{
+          "from": "16505557777",
+          "id": "wamid.leg1",
+          "timestamp": "1749416383",
+          "type": "button",
+          "button": {
+            "payload": "legacy_payload_42",
+            "text": "Legacy Click"
+          }
+        }]
+      }
+    }]
+  }]
+}`
+
 	var received []Message
 	var mu sync.Mutex
 	handler := func(c *Context) error {
@@ -615,7 +640,7 @@ func TestInteractiveRepliesMapping(t *testing.T) {
 	b := newTestBot(t, s, handler, Config{})
 	defer shutdown(t, b)
 
-	for _, payload := range []string{buttonPayload, listPayload} {
+	for _, payload := range []string{buttonPayload, listPayload, legacyButtonPayload} {
 		req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
 		req.Header.Set("X-Hub-Signature-256", sign(testAppSecret, payload))
 		rec := httptest.NewRecorder()
@@ -628,22 +653,25 @@ func TestInteractiveRepliesMapping(t *testing.T) {
 	waitFor(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return len(received) == 2
+		return len(received) == 3
 	})
 
 	mu.Lock()
 	defer mu.Unlock()
-	if received[0].ID != "wamid.btn1" || received[0].Type != "interactive" || received[0].Text != "Yes, please" {
-		t.Errorf("button message = %+v, want Type=interactive Text='Yes, please'", received[0])
+	if received[0].ID != "wamid.btn1" || received[0].Type != "interactive" || received[0].Text != "Yes, please" || received[0].SelectionID != "btn_yes" {
+		t.Errorf("button message = %+v, want Type=interactive Text='Yes, please' SelectionID='btn_yes'", received[0])
 	}
-	if received[1].ID != "wamid.list1" || received[1].Type != "interactive" || received[1].Text != "Option Two" {
-		t.Errorf("list message = %+v, want Type=interactive Text='Option Two'", received[1])
+	if received[1].ID != "wamid.list1" || received[1].Type != "interactive" || received[1].Text != "Option Two" || received[1].SelectionID != "opt_2" {
+		t.Errorf("list message = %+v, want Type=interactive Text='Option Two' SelectionID='opt_2'", received[1])
+	}
+	if received[2].ID != "wamid.leg1" || received[2].Type != "button" || received[2].Text != "Legacy Click" || received[2].SelectionID != "legacy_payload_42" {
+		t.Errorf("legacy button message = %+v, want Type=button Text='Legacy Click' SelectionID='legacy_payload_42'", received[2])
 	}
 
 	waitFor(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return len(s.sent) == 2
+		return len(s.sent) == 3
 	})
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -652,6 +680,9 @@ func TestInteractiveRepliesMapping(t *testing.T) {
 	}
 	if s.sent[1].body != "You picked: Option Two" {
 		t.Errorf("sent[1].body = %q, want 'You picked: Option Two'", s.sent[1].body)
+	}
+	if s.sent[2].body != "You picked: Legacy Click" {
+		t.Errorf("sent[2].body = %q, want 'You picked: Legacy Click'", s.sent[2].body)
 	}
 }
 

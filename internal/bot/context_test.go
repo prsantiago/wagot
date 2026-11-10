@@ -16,21 +16,135 @@ func TestMessageTypeIsDefinedDomainType(t *testing.T) {
 }
 
 func TestContextDoesNotExposeWireJSONTags(t *testing.T) {
-	ctxTyp := reflect.TypeOf(Context{})
-	for i := range ctxTyp.NumField() {
-		field := ctxTyp.Field(i)
-		if tag := field.Tag.Get("json"); tag != "" {
-			t.Errorf("Context field %q exposes json tag %q", field.Name, tag)
-		}
-		fieldType := field.Type
-		if fieldType.Kind() == reflect.Struct && fieldType.PkgPath() == "github.com/chachin/wagot/internal/bot" {
-			for j := range fieldType.NumField() {
-				subField := fieldType.Field(j)
-				if subTag := subField.Tag.Get("json"); subTag != "" {
-					t.Errorf("Context field %q (type %s) leaks wire JSON tag on %q", field.Name, fieldType.Name(), subField.Name)
+	typesToCheck := []any{Context{}, Message{}, Contact{}, Profile{}, Text{}, Buttons{}, Button{}}
+	for _, target := range typesToCheck {
+		typ := reflect.TypeOf(target)
+		for i := range typ.NumField() {
+			field := typ.Field(i)
+			if tag := field.Tag.Get("json"); tag != "" {
+				t.Errorf("%s field %q exposes json tag %q", typ.Name(), field.Name, tag)
+			}
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Struct && fieldType.PkgPath() == "github.com/chachin/wagot/internal/bot" {
+				for j := range fieldType.NumField() {
+					subField := fieldType.Field(j)
+					if subTag := subField.Tag.Get("json"); subTag != "" {
+						t.Errorf("%s field %q (type %s) leaks wire JSON tag on %q", typ.Name(), field.Name, fieldType.Name(), subField.Name)
+					}
 				}
 			}
 		}
+	}
+}
+
+func TestContextSendText(t *testing.T) {
+	sender := &fakeSender{}
+	msg := Message{ID: "wamid.123", From: "15551234567", Type: MessageTypeText, Text: "hi"}
+	c := NewContext(context.Background(), sender, "PNID_TEST", msg)
+
+	err := c.Send(Text{Body: "https://wagot.example/preview", PreviewURL: true})
+	if err != nil {
+		t.Fatalf("c.Send(Text) error = %v", err)
+	}
+
+	if len(sender.msgs) != 1 {
+		t.Fatalf("len(sender.msgs) = %d, want 1", len(sender.msgs))
+	}
+	sentMsg := sender.msgs[0]
+	if sentMsg.Type != "text" || sentMsg.Text == nil {
+		t.Fatalf("unexpected sentMsg = %+v", sentMsg)
+	}
+	if sentMsg.Text.Body != "https://wagot.example/preview" || !sentMsg.Text.PreviewURL {
+		t.Errorf("sentMsg.Text = %+v, want body and PreviewURL=true", sentMsg.Text)
+	}
+}
+
+func TestContextSendButtons(t *testing.T) {
+	sender := &fakeSender{}
+	msg := Message{ID: "wamid.123", From: "15551234567", Type: MessageTypeText, Text: "menu"}
+	c := NewContext(context.Background(), sender, "PNID_TEST", msg)
+
+	buttons := []Button{
+		{ID: "btn_trips", Title: "Nuestros viajes"},
+		{ID: "btn_contact", Title: "Contacto"},
+	}
+	err := c.Send(Buttons{Body: "¿Cómo podemos ayudarte?", Buttons: buttons})
+	if err != nil {
+		t.Fatalf("c.Send(Buttons) error = %v", err)
+	}
+
+	if len(sender.msgs) != 1 {
+		t.Fatalf("len(sender.msgs) = %d, want 1", len(sender.msgs))
+	}
+	sentMsg := sender.msgs[0]
+	if sentMsg.Type != "interactive" {
+		t.Fatalf("sentMsg.Type = %q, want interactive", sentMsg.Type)
+	}
+	inter := sentMsg.Interactive
+	if inter == nil || inter.Type != "button" {
+		t.Fatalf("Interactive = %+v, want button", sentMsg.Interactive)
+	}
+	if inter.Body == nil || inter.Body.Text != "¿Cómo podemos ayudarte?" {
+		t.Errorf("inter.Body = %+v", inter.Body)
+	}
+	if inter.Action == nil || len(inter.Action.Buttons) != 2 {
+		t.Fatalf("inter.Action.Buttons = %+v, want 2 buttons", inter.Action)
+	}
+	if inter.Action.Buttons[0].Reply.ID != "btn_trips" || inter.Action.Buttons[0].Reply.Title != "Nuestros viajes" {
+		t.Errorf("button 0 = %+v", inter.Action.Buttons[0])
+	}
+	if inter.Action.Buttons[1].Reply.ID != "btn_contact" || inter.Action.Buttons[1].Reply.Title != "Contacto" {
+		t.Errorf("button 1 = %+v", inter.Action.Buttons[1])
+	}
+}
+
+func TestContextSendValidation(t *testing.T) {
+	sender := &fakeSender{}
+	c := NewContext(context.Background(), sender, "PNID_TEST", Message{ID: "wamid.1", From: "15551234567"})
+
+	tests := map[string]struct {
+		reply   Reply
+		wantErr bool
+	}{
+		"nil reply": {
+			reply:   nil,
+			wantErr: true,
+		},
+		"empty text": {
+			reply:   Text{Body: ""},
+			wantErr: true,
+		},
+		"empty buttons body": {
+			reply:   Buttons{Body: "", Buttons: []Button{{ID: "1", Title: "A"}}},
+			wantErr: true,
+		},
+		"no buttons": {
+			reply:   Buttons{Body: "select", Buttons: nil},
+			wantErr: true,
+		},
+		"too many buttons": {
+			reply: Buttons{Body: "select", Buttons: []Button{
+				{ID: "1", Title: "1"}, {ID: "2", Title: "2"}, {ID: "3", Title: "3"}, {ID: "4", Title: "4"},
+			}},
+			wantErr: true,
+		},
+		"empty button ID": {
+			reply:   Buttons{Body: "select", Buttons: []Button{{ID: "", Title: "A"}}},
+			wantErr: true,
+		},
+		"empty button Title": {
+			reply:   Buttons{Body: "select", Buttons: []Button{{ID: "1", Title: ""}}},
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := c.Send(tc.reply)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("c.Send() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
 	}
 }
 
