@@ -16,7 +16,7 @@ func TestMessageTypeIsDefinedDomainType(t *testing.T) {
 }
 
 func TestContextDoesNotExposeWireJSONTags(t *testing.T) {
-	typesToCheck := []any{Context{}, Message{}, Contact{}, Profile{}, Text{}, Buttons{}, Button{}}
+	typesToCheck := []any{Context{}, Message{}, Contact{}, Profile{}, Text{}, Buttons{}, Button{}, List{}, ListItem{}, Image{}}
 	for _, target := range typesToCheck {
 		typ := reflect.TypeOf(target)
 		for i := range typ.NumField() {
@@ -98,6 +98,72 @@ func TestContextSendButtons(t *testing.T) {
 	}
 }
 
+func TestContextSendList(t *testing.T) {
+	sender := &fakeSender{}
+	msg := Message{ID: "wamid.123", From: "15551234567", Type: MessageTypeInteractive, SelectionID: "trips"}
+	c := NewContext(context.Background(), sender, "PNID_TEST", msg)
+
+	items := []ListItem{
+		{ID: "trip_1", Title: "Cancun", Description: "Playas"},
+		{ID: "trip_2", Title: "Machu Picchu", Description: "Montañas"},
+	}
+	err := c.Send(List{Body: "Elige tu viaje:", Button: "Ver viajes", Items: items})
+	if err != nil {
+		t.Fatalf("c.Send(List) error = %v", err)
+	}
+
+	if len(sender.msgs) != 1 {
+		t.Fatalf("len(sender.msgs) = %d, want 1", len(sender.msgs))
+	}
+	sentMsg := sender.msgs[0]
+	if sentMsg.Type != "interactive" {
+		t.Fatalf("sentMsg.Type = %q, want interactive", sentMsg.Type)
+	}
+	inter := sentMsg.Interactive
+	if inter == nil || inter.Type != "list" {
+		t.Fatalf("Interactive = %+v, want list", sentMsg.Interactive)
+	}
+	if inter.Body == nil || inter.Body.Text != "Elige tu viaje:" {
+		t.Errorf("inter.Body = %+v", inter.Body)
+	}
+	if inter.Action == nil || inter.Action.Button != "Ver viajes" {
+		t.Errorf("inter.Action.Button = %q, want 'Ver viajes'", inter.Action.Button)
+	}
+	if len(inter.Action.Sections) != 1 || len(inter.Action.Sections[0].Rows) != 2 {
+		t.Fatalf("inter.Action.Sections = %+v, want 1 section with 2 rows", inter.Action.Sections)
+	}
+	row0 := inter.Action.Sections[0].Rows[0]
+	if row0.ID != "trip_1" || row0.Title != "Cancun" || row0.Description != "Playas" {
+		t.Errorf("row0 = %+v", row0)
+	}
+	row1 := inter.Action.Sections[0].Rows[1]
+	if row1.ID != "trip_2" || row1.Title != "Machu Picchu" || row1.Description != "Montañas" {
+		t.Errorf("row1 = %+v", row1)
+	}
+}
+
+func TestContextSendImage(t *testing.T) {
+	sender := &fakeSender{}
+	msg := Message{ID: "wamid.123", From: "15551234567", Type: MessageTypeInteractive, SelectionID: "trip_cancun"}
+	c := NewContext(context.Background(), sender, "PNID_TEST", msg)
+
+	err := c.Send(Image{URL: "https://example.com/cancun.jpg", Caption: "Cancun package"})
+	if err != nil {
+		t.Fatalf("c.Send(Image) error = %v", err)
+	}
+
+	if len(sender.msgs) != 1 {
+		t.Fatalf("len(sender.msgs) = %d, want 1", len(sender.msgs))
+	}
+	sentMsg := sender.msgs[0]
+	if sentMsg.Type != "image" || sentMsg.Image == nil {
+		t.Fatalf("sentMsg = %+v, want image message", sentMsg)
+	}
+	if sentMsg.Image.Link != "https://example.com/cancun.jpg" || sentMsg.Image.Caption != "Cancun package" {
+		t.Errorf("sentMsg.Image = %+v", sentMsg.Image)
+	}
+}
+
 func TestContextSendValidation(t *testing.T) {
 	sender := &fakeSender{}
 	c := NewContext(context.Background(), sender, "PNID_TEST", Message{ID: "wamid.1", From: "15551234567"})
@@ -134,6 +200,42 @@ func TestContextSendValidation(t *testing.T) {
 		},
 		"empty button Title": {
 			reply:   Buttons{Body: "select", Buttons: []Button{{ID: "1", Title: ""}}},
+			wantErr: true,
+		},
+		"empty list body": {
+			reply:   List{Body: "", Button: "btn", Items: []ListItem{{ID: "1", Title: "A"}}},
+			wantErr: true,
+		},
+		"empty list button": {
+			reply:   List{Body: "list", Button: "", Items: []ListItem{{ID: "1", Title: "A"}}},
+			wantErr: true,
+		},
+		"no list items": {
+			reply:   List{Body: "list", Button: "btn", Items: nil},
+			wantErr: true,
+		},
+		"too many list items": {
+			reply: List{Body: "list", Button: "btn", Items: []ListItem{
+				{ID: "1", Title: "1"}, {ID: "2", Title: "2"}, {ID: "3", Title: "3"}, {ID: "4", Title: "4"},
+				{ID: "5", Title: "5"}, {ID: "6", Title: "6"}, {ID: "7", Title: "7"}, {ID: "8", Title: "8"},
+				{ID: "9", Title: "9"}, {ID: "10", Title: "10"}, {ID: "11", Title: "11"},
+			}},
+			wantErr: true,
+		},
+		"empty list item ID": {
+			reply:   List{Body: "list", Button: "btn", Items: []ListItem{{ID: "", Title: "A"}}},
+			wantErr: true,
+		},
+		"empty list item Title": {
+			reply:   List{Body: "list", Button: "btn", Items: []ListItem{{ID: "1", Title: ""}}},
+			wantErr: true,
+		},
+		"empty image URL": {
+			reply:   Image{URL: "", Caption: "caption"},
+			wantErr: true,
+		},
+		"non-https image URL": {
+			reply:   Image{URL: "http://example.com/pic.jpg", Caption: "caption"},
 			wantErr: true,
 		},
 	}

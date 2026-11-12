@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/chachin/wagot/internal/cloudapi"
 )
@@ -46,6 +47,22 @@ func (t Text) toCloudAPI() (cloudapi.Message, error) {
 	return cloudapi.TextMessageWithPreview(t.Body, t.PreviewURL), nil
 }
 
+// Image is a standalone image reply with a public HTTPS URL and optional caption.
+type Image struct {
+	URL     string
+	Caption string
+}
+
+func (img Image) toCloudAPI() (cloudapi.Message, error) {
+	if img.URL == "" {
+		return cloudapi.Message{}, errors.New("bot: image URL cannot be empty")
+	}
+	if !strings.HasPrefix(img.URL, "https://") {
+		return cloudapi.Message{}, errors.New("bot: image URL must use https")
+	}
+	return cloudapi.ImageMessage(img.URL, img.Caption), nil
+}
+
 // Button is an action button on a Button Reply.
 type Button struct {
 	ID    string
@@ -76,6 +93,47 @@ func (b Buttons) toCloudAPI() (cloudapi.Message, error) {
 		}
 	}
 	return cloudapi.ButtonMessage(b.Body, cloudButtons), nil
+}
+
+// ListItem represents a selectable item inside a List Reply.
+type ListItem struct {
+	ID          string
+	Title       string
+	Description string
+}
+
+// List is an interactive list reply presenting a menu button opening a selectable list of options.
+type List struct {
+	Body   string
+	Button string
+	Items  []ListItem
+}
+
+func (l List) toCloudAPI() (cloudapi.Message, error) {
+	if l.Body == "" {
+		return cloudapi.Message{}, errors.New("bot: list reply body cannot be empty")
+	}
+	if l.Button == "" {
+		return cloudapi.Message{}, errors.New("bot: list reply button cannot be empty")
+	}
+	if len(l.Items) == 0 {
+		return cloudapi.Message{}, errors.New("bot: list reply must have at least 1 item")
+	}
+	if len(l.Items) > 10 {
+		return cloudapi.Message{}, errors.New("bot: list reply cannot have more than 10 items")
+	}
+	rows := make([]cloudapi.ListRow, len(l.Items))
+	for i, item := range l.Items {
+		if item.ID == "" || item.Title == "" {
+			return cloudapi.Message{}, errors.New("bot: list item ID and title cannot be empty")
+		}
+		rows[i] = cloudapi.ListRow{
+			ID:          item.ID,
+			Title:       item.Title,
+			Description: item.Description,
+		}
+	}
+	return cloudapi.ListMessage(l.Body, l.Button, rows), nil
 }
 
 // Context provides conversational context and outbound intent methods to a Handler.

@@ -37,7 +37,29 @@ type InteractiveBody struct {
 
 // InteractiveAction contains the interactive components (buttons, sections).
 type InteractiveAction struct {
-	Buttons []InteractiveButton `json:"buttons,omitempty"`
+	Button   string               `json:"button,omitempty"`
+	Buttons  []InteractiveButton  `json:"buttons,omitempty"`
+	Sections []InteractiveSection `json:"sections,omitempty"`
+}
+
+// InteractiveSection contains a list of rows.
+type InteractiveSection struct {
+	Title string           `json:"title,omitempty"`
+	Rows  []InteractiveRow `json:"rows"`
+}
+
+// InteractiveRow represents a single selectable item inside a list section.
+type InteractiveRow struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+// ListRow is a row definition for constructing a list reply.
+type ListRow struct {
+	ID          string
+	Title       string
+	Description string
 }
 
 // InteractiveButton represents an action button inside an interactive Button Reply.
@@ -107,6 +129,17 @@ func TextMessageWithPreview(body string, previewURL bool) Message {
 	return Message{Type: "text", Text: &Text{Body: body, PreviewURL: previewURL}}
 }
 
+// ImageMessage returns a standalone image reply referencing a public HTTPS link with an optional caption.
+func ImageMessage(link, caption string) Message {
+	return Message{
+		Type: "image",
+		Image: &Media{
+			Link:    link,
+			Caption: caption,
+		},
+	}
+}
+
 // ButtonMessage returns an interactive button reply message.
 func ButtonMessage(body string, buttons []Button) Message {
 	interactiveButtons := make([]InteractiveButton, len(buttons))
@@ -125,6 +158,31 @@ func ButtonMessage(body string, buttons []Button) Message {
 			Type:   "button",
 			Body:   &InteractiveBody{Text: body},
 			Action: &InteractiveAction{Buttons: interactiveButtons},
+		},
+	}
+}
+
+// ListMessage returns an interactive list reply message.
+func ListMessage(body, button string, rows []ListRow) Message {
+	interactiveRows := make([]InteractiveRow, len(rows))
+	for i, r := range rows {
+		interactiveRows[i] = InteractiveRow{
+			ID:          r.ID,
+			Title:       r.Title,
+			Description: r.Description,
+		}
+	}
+	return Message{
+		Type: "interactive",
+		Interactive: &Interactive{
+			Type: "list",
+			Body: &InteractiveBody{Text: body},
+			Action: &InteractiveAction{
+				Button: button,
+				Sections: []InteractiveSection{
+					{Rows: interactiveRows},
+				},
+			},
 		},
 	}
 }

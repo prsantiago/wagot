@@ -22,11 +22,83 @@ func MainMenuButtons() bot.Buttons {
 	}
 }
 
+// Step represents an action taken when a user selects an option.
+type Step struct {
+	Reply            bot.Reply
+	FollowUpMainMenu bool
+}
+
+// DefaultSteps returns the built-in trip and contact step definitions.
+func DefaultSteps() map[string]Step {
+	return map[string]Step{
+		"trips": {
+			Reply: bot.List{
+				Body:   "Explora nuestros paquetes turísticos más populares. Elige un destino para conocer detalles y fotografías:",
+				Button: "Ver destinos",
+				Items: []bot.ListItem{
+					{
+						ID:          "trip_cancun",
+						Title:       "Cancún, México",
+						Description: "Playas paradisíacas, sol y arqueología maya.",
+					},
+					{
+						ID:          "trip_machu_picchu",
+						Title:       "Machu Picchu, Perú",
+						Description: "Historia viva, cultura andina y naturaleza.",
+					},
+					{
+						ID:          "trip_buenos_aires",
+						Title:       "Buenos Aires, Arg.",
+						Description: "Tango, arquitectura clásica y gastronomía.",
+					},
+				},
+			},
+			FollowUpMainMenu: false,
+		},
+		"trip_cancun": {
+			Reply: bot.Image{
+				URL:     "https://images.unsplash.com/photo-1510097467424-192d713fd8b2",
+				Caption: "🏖️ Cancún, México: Disfruta de 5 días y 4 noches en resort todo incluido frente al mar Caribe con tour guiado a Chichén Itzá.",
+			},
+			FollowUpMainMenu: true,
+		},
+		"trip_machu_picchu": {
+			Reply: bot.Image{
+				URL:     "https://images.unsplash.com/photo-1526392060635-9d6019884377",
+				Caption: "🏔️ Machu Picchu, Perú: Paquete de 6 días que incluye pasajes en tren panorámico, entrada a la ciudadela inca y estadía en Cusco.",
+			},
+			FollowUpMainMenu: true,
+		},
+		"trip_buenos_aires": {
+			Reply: bot.Image{
+				URL:     "https://images.unsplash.com/photo-1589909202802-8f4aadce1849",
+				Caption: "🍷 Buenos Aires, Argentina: 4 días de cultura y tango en San Telmo y Recoleta con cena-show y recorrido gastronómico.",
+			},
+			FollowUpMainMenu: true,
+		},
+		"contact": {
+			Reply: bot.Text{
+				Body: "📍 *Wagot Viajes - Atención al Cliente*\n\n" +
+					"Estamos listos para planificar tus próximas vacaciones.\n\n" +
+					"📱 Teléfono: +1 (555) 019-2834\n" +
+					"📧 Email: contacto@wagotviajes.com\n" +
+					"🌐 Sitio Web: https://wagot.example.com\n" +
+					"📸 Instagram: @wagotviajes\n\n" +
+					"Encuéntranos en nuestras oficinas centrales:\n" +
+					"https://maps.google.com/?q=Wagot+Viajes",
+				PreviewURL: true,
+			},
+			FollowUpMainMenu: true,
+		},
+	}
+}
+
 // Flow coordinates the conversational rules.
 type Flow struct {
 	Greetings       []string
 	MainMenu        bot.Buttons
 	UnsupportedText string
+	Steps           map[string]Step
 }
 
 // DefaultFlow returns the default trip agency flow configuration.
@@ -35,6 +107,7 @@ func DefaultFlow() *Flow {
 		Greetings:       defaultGreetings,
 		MainMenu:        MainMenuButtons(),
 		UnsupportedText: "Por el momento solo puedo leer mensajes de texto.",
+		Steps:           DefaultSteps(),
 	}
 }
 
@@ -60,6 +133,18 @@ func (f *Flow) Handle(c *bot.Context) error {
 			}
 		}
 		return c.Send(f.MainMenu)
+	case bot.MessageTypeInteractive, bot.MessageTypeButton:
+		step, ok := f.Steps[c.Message.SelectionID]
+		if !ok {
+			return c.Send(f.MainMenu)
+		}
+		if err := c.Send(step.Reply); err != nil {
+			return err
+		}
+		if step.FollowUpMainMenu {
+			return c.Send(f.MainMenu)
+		}
+		return nil
 	case bot.MessageTypeReaction, bot.MessageTypeSystem:
 		return nil
 	default:

@@ -258,3 +258,172 @@ func TestUnsupportedMessageTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestInteractiveTripsSelectionEmitsListReply(t *testing.T) {
+	sender := &recordSender{}
+	h := NewHandler()
+
+	msg := bot.Message{
+		ID:          "wamid.interactive_trips",
+		From:        "15551234567",
+		Type:        bot.MessageTypeInteractive,
+		SelectionID: "trips",
+		Text:        "Nuestros viajes",
+	}
+	c := bot.NewContext(context.Background(), sender, "PNID_TEST", msg)
+
+	if err := h(c); err != nil {
+		t.Fatalf("h(c) error = %v", err)
+	}
+
+	if len(sender.msgs) != 1 {
+		t.Fatalf("got %d messages sent, want exactly 1 (List Reply without Main Menu)", len(sender.msgs))
+	}
+
+	sent := sender.msgs[0]
+	if sent.Type != "interactive" || sent.Interactive == nil {
+		t.Fatalf("sent = %+v, want interactive List Reply", sent)
+	}
+	if sent.Interactive.Type != "list" {
+		t.Fatalf("sent.Interactive.Type = %q, want 'list'", sent.Interactive.Type)
+	}
+	if sent.Interactive.Body == nil || sent.Interactive.Body.Text == "" {
+		t.Errorf("sent.Interactive.Body = %+v, want non-empty body text", sent.Interactive.Body)
+	}
+	if sent.Interactive.Action == nil || sent.Interactive.Action.Button == "" {
+		t.Errorf("sent.Interactive.Action.Button = %q, want non-empty button label", sent.Interactive.Action.Button)
+	}
+	if len(sent.Interactive.Action.Sections) == 0 || len(sent.Interactive.Action.Sections[0].Rows) == 0 {
+		t.Fatalf("sent.Interactive.Action.Sections = %+v, want at least 1 section with rows", sent.Interactive.Action.Sections)
+	}
+}
+
+func TestInteractiveDestinationSelectionEmitsImageReplyAndFollowUpMainMenu(t *testing.T) {
+	destinations := []string{"trip_cancun", "trip_machu_picchu", "trip_buenos_aires"}
+
+	for _, destID := range destinations {
+		t.Run(destID, func(t *testing.T) {
+			sender := &recordSender{}
+			h := NewHandler()
+
+			msg := bot.Message{
+				ID:          "wamid.dest." + destID,
+				From:        "15551234567",
+				Type:        bot.MessageTypeInteractive,
+				SelectionID: destID,
+			}
+			c := bot.NewContext(context.Background(), sender, "PNID_TEST", msg)
+
+			if err := h(c); err != nil {
+				t.Fatalf("h(c) error = %v", err)
+			}
+
+			if len(sender.msgs) != 2 {
+				t.Fatalf("got %d messages sent, want 2 (image reply + Main Menu)", len(sender.msgs))
+			}
+
+			// First message must be Image Reply with HTTPS link and non-empty caption
+			msg1 := sender.msgs[0]
+			if msg1.Type != "image" || msg1.Image == nil {
+				t.Fatalf("msg[0] = %+v, want image message", msg1)
+			}
+			if !strings.HasPrefix(msg1.Image.Link, "https://") {
+				t.Errorf("msg[0].Image.Link = %q, want public HTTPS URL", msg1.Image.Link)
+			}
+			if msg1.Image.Caption == "" {
+				t.Errorf("msg[0].Image.Caption is empty, want descriptive caption")
+			}
+
+			// Second message must be Main Menu Button Reply
+			assertMainMenuButtons(t, sender.msgs[1])
+		})
+	}
+}
+
+func TestInteractiveContactSelectionEmitsTextReplyWithPreviewAndFollowUpMainMenu(t *testing.T) {
+	sender := &recordSender{}
+	h := NewHandler()
+
+	msg := bot.Message{
+		ID:          "wamid.interactive_contact",
+		From:        "15551234567",
+		Type:        bot.MessageTypeInteractive,
+		SelectionID: "contact",
+		Text:        "Contacto",
+	}
+	c := bot.NewContext(context.Background(), sender, "PNID_TEST", msg)
+
+	if err := h(c); err != nil {
+		t.Fatalf("h(c) error = %v", err)
+	}
+
+	if len(sender.msgs) != 2 {
+		t.Fatalf("got %d messages sent, want 2 (contact text reply + Main Menu)", len(sender.msgs))
+	}
+
+	// First message must be text Reply with URL preview enabled and containing Google Maps link
+	msg1 := sender.msgs[0]
+	if msg1.Type != "text" || msg1.Text == nil {
+		t.Fatalf("msg[0] = %+v, want text message", msg1)
+	}
+	if !msg1.Text.PreviewURL {
+		t.Errorf("msg[0].Text.PreviewURL = false, want true")
+	}
+	if !strings.Contains(msg1.Text.Body, "maps.google.com") && !strings.Contains(msg1.Text.Body, "goo.gl/maps") {
+		t.Errorf("msg[0].Text.Body = %q, want Google Maps URL", msg1.Text.Body)
+	}
+
+	// Second message must be Main Menu Button Reply
+	assertMainMenuButtons(t, sender.msgs[1])
+}
+
+func TestUnknownSelectionIDEmitsMainMenuButtonReply(t *testing.T) {
+	testCases := []struct {
+		name    string
+		msgType bot.MessageType
+		selID   string
+	}{
+		{"interactive unknown id", bot.MessageTypeInteractive, "unknown_selection"},
+		{"interactive outdated id", bot.MessageTypeInteractive, "outdated_promo_2024"},
+		{"interactive empty id", bot.MessageTypeInteractive, ""},
+		{"button unknown selection", bot.MessageTypeButton, "unknown_button"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &recordSender{}
+			h := NewHandler()
+
+			msg := bot.Message{
+				ID:          "wamid.unknown",
+				From:        "15551234567",
+				Type:        tc.msgType,
+				SelectionID: tc.selID,
+			}
+			c := bot.NewContext(context.Background(), sender, "PNID_TEST", msg)
+
+			if err := h(c); err != nil {
+				t.Fatalf("h(c) error = %v", err)
+			}
+
+			if len(sender.msgs) != 1 {
+				t.Fatalf("got %d messages sent, want exactly 1 (Main Menu)", len(sender.msgs))
+			}
+
+			assertMainMenuButtons(t, sender.msgs[0])
+		})
+	}
+}
+
+func assertMainMenuButtons(t *testing.T, sent cloudapi.Message) {
+	t.Helper()
+	if sent.Type != "interactive" || sent.Interactive == nil || sent.Interactive.Type != "button" {
+		t.Fatalf("sent = %+v, want interactive Main Menu button reply", sent)
+	}
+	if sent.Interactive.Action == nil || len(sent.Interactive.Action.Buttons) != 2 {
+		t.Fatalf("buttons = %+v, want 2 buttons", sent.Interactive.Action)
+	}
+	if sent.Interactive.Action.Buttons[0].Reply.Title != "Nuestros viajes" || sent.Interactive.Action.Buttons[1].Reply.Title != "Contacto" {
+		t.Errorf("buttons = %+v, want 'Nuestros viajes' and 'Contacto'", sent.Interactive.Action.Buttons)
+	}
+}

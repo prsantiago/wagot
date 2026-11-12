@@ -26,6 +26,7 @@ func TestConverse(t *testing.T) {
 	tests := map[string]struct {
 		msgType     bot.MessageType
 		text        string
+		selectionID string
 		profileName string
 		wantTypes   []string
 		wantBody    string
@@ -51,6 +52,31 @@ func TestConverse(t *testing.T) {
 			profileName: "Santiago",
 			wantTypes:   []string{"interactive"},
 		},
+		"interactive selection trips emits list reply": {
+			msgType:     bot.MessageTypeInteractive,
+			selectionID: "trips",
+			text:        "Nuestros viajes",
+			wantTypes:   []string{"interactive"},
+		},
+		"interactive selection destination emits image and main menu": {
+			msgType:     bot.MessageTypeInteractive,
+			selectionID: "trip_cancun",
+			text:        "Cancún, México",
+			wantTypes:   []string{"image", "interactive"},
+		},
+		"interactive selection contact emits text with preview and main menu": {
+			msgType:     bot.MessageTypeInteractive,
+			selectionID: "contact",
+			text:        "Contacto",
+			wantTypes:   []string{"text", "interactive"},
+			wantBody:    "maps.google.com",
+		},
+		"interactive unknown selection emits main menu button reply": {
+			msgType:     bot.MessageTypeInteractive,
+			selectionID: "unknown_id",
+			text:        "",
+			wantTypes:   []string{"interactive"},
+		},
 		"reaction is ignored": {
 			msgType:   bot.MessageTypeReaction,
 			text:      "",
@@ -74,10 +100,11 @@ func TestConverse(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := &fakeSender{}
 			msg := bot.Message{
-				ID:   "wamid.incoming",
-				From: "15551234567",
-				Type: tc.msgType,
-				Text: tc.text,
+				ID:          "wamid.incoming",
+				From:        "15551234567",
+				Type:        tc.msgType,
+				Text:        tc.text,
+				SelectionID: tc.selectionID,
 			}
 			c := bot.NewContext(context.Background(), s, "106540352242922", msg)
 			c.Contact = bot.Contact{
