@@ -1,0 +1,83 @@
+{
+  "_comment": "Template flow configuration for wagot. See docs/flow.md for full field reference.",
+  "greetings": [
+    "hola",
+    "informacion",
+    "menu"
+  ],
+  "welcome_template": "¡Hola, %s! Te damos la bienvenida a Wagot Viajes ✈️",
+  "welcome_fallback": "¡Hola! Te damos la bienvenida a Wagot Viajes ✈️",
+  "unsupported_text": "Por el momento solo puedo leer mensajes de texto.",
+  "main_menu": {
+    "body": "¿En qué podemos ayudarte hoy?",
+    "buttons": [
+      {
+        "id": "trips",
+        "title": "Nuestros viajes"
+      },
+      {
+        "id": "contact",
+        "title": "Contacto"
+      }
+    ]
+  },
+  "steps": {
+    "trips": {
+      "reply": {
+        "type": "list",
+        "body": "Explora nuestros paquetes turísticos más populares. Elige un destino para conocer detalles y fotografías:",
+        "button": "Ver destinos",
+        "items": [
+          {
+            "id": "trip_cancun",
+            "title": "Cancún, México",
+            "description": "Playas paradisíacas, sol y arqueología maya."
+          },
+          {
+            "id": "trip_machu_picchu",
+            "title": "Machu Picchu, Perú",
+            "description": "Historia viva, cultura andina y naturaleza."
+          },
+          {
+            "id": "trip_buenos_aires",
+            "title": "Buenos Aires, Arg.",
+            "description": "Tango, arquitectura clásica y gastronomía."
+          }
+        ]
+      },
+      "follow_up_main_menu": false
+    },
+    "trip_cancun": {
+      "reply": {
+        "type": "image",
+        "url": "https://images.unsplash.com/photo-1510097467424-192d713fd8b2",
+        "caption": "🏖️ Cancún, México: Disfruta de 5 días y 4 noches en resort todo incluido frente al mar Caribe con tour guiado a Chichén Itzá."
+      },
+      "follow_up_main_menu": true
+    },
+    "trip_machu_picchu": {
+      "reply": {
+        "type": "image",
+        "url": "https://images.unsplash.com/photo-1526392060635-9d6019884377",
+        "caption": "🏔️ Machu Picchu, Perú: Paquete de 6 días que incluye pasajes en tren panorámico, entrada a la ciudadela inca y estadía en Cusco."
+      },
+      "follow_up_main_menu": true
+    },
+    "trip_buenos_aires": {
+      "reply": {
+        "type": "image",
+        "url": "https://images.unsplash.com/photo-1589909202802-8f4aadce1849",
+        "caption": "🍷 Buenos Aires, Argentina: 4 días de cultura y tango en San Telmo y Recoleta con cena-show y recorrido gastronómico."
+      },
+      "follow_up_main_menu": true
+    },
+    "contact": {
+      "reply": {
+        "type": "text",
+        "body": "📍 *Wagot Viajes - Atención al Cliente*\n\nEstamos listos para planificar tus próximas vacaciones.\n\n📱 Teléfono: +1 (555) 019-2834\n📧 Email: contacto@wagotviajes.com\n🌐 Sitio Web: https://wagot.example.com\n📸 Instagram: @wagotviajes\n\nEncuéntranos en nuestras oficinas centrales:\nhttps://maps.google.com/?q=Wagot+Viajes",
+        "preview_url": true
+      },
+      "follow_up_main_menu": true
+    }
+  }
+}
