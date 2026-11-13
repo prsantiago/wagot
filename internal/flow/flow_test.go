@@ -427,3 +427,116 @@ func assertMainMenuButtons(t *testing.T, sent cloudapi.Message) {
 		t.Errorf("buttons = %+v, want 'Nuestros viajes' and 'Contacto'", sent.Interactive.Action.Buttons)
 	}
 }
+
+func TestWelcomeTemplateNamePlaceholder(t *testing.T) {
+	t.Run("replaces {{name}} with contact profile name", func(t *testing.T) {
+		sender := &recordSender{}
+		fl := &Flow{
+			Greetings:       []string{"hola"},
+			WelcomeTemplate: "¡Hola {{name}}! Bienvenido a Wagot Viajes ✈️",
+			WelcomeFallback: "¡Hola! Bienvenido a Wagot Viajes ✈️",
+			MainMenu: bot.Buttons{
+				Body: "¿En qué podemos ayudarte?",
+				Buttons: []bot.Button{{ID: "b1", Title: "Opciones"}},
+			},
+		}
+
+		msg := bot.Message{ID: "m1", From: "1555", Type: bot.MessageTypeText, Text: "hola"}
+		c := bot.NewContext(context.Background(), sender, "PNID", msg)
+		c.Contact = bot.Contact{Profile: bot.Profile{Name: "Santiago"}}
+
+		if err := fl.Handle(c); err != nil {
+			t.Fatalf("Handle() err = %v", err)
+		}
+
+		if len(sender.msgs) != 2 {
+			t.Fatalf("got %d messages, want 2", len(sender.msgs))
+		}
+		want := "¡Hola Santiago! Bienvenido a Wagot Viajes ✈️"
+		if got := sender.msgs[0].Text.Body; got != want {
+			t.Errorf("got welcome text %q, want %q", got, want)
+		}
+	})
+
+	t.Run("uses fallback when profile name is empty", func(t *testing.T) {
+		sender := &recordSender{}
+		fl := &Flow{
+			Greetings:       []string{"hola"},
+			WelcomeTemplate: "¡Hola {{name}}! Bienvenido a Wagot Viajes ✈️",
+			WelcomeFallback: "¡Hola! Bienvenido a Wagot Viajes ✈️",
+			MainMenu: bot.Buttons{
+				Body: "¿En qué podemos ayudarte?",
+				Buttons: []bot.Button{{ID: "b1", Title: "Opciones"}},
+			},
+		}
+
+		msg := bot.Message{ID: "m1", From: "1555", Type: bot.MessageTypeText, Text: "hola"}
+		c := bot.NewContext(context.Background(), sender, "PNID", msg)
+		c.Contact = bot.Contact{Profile: bot.Profile{Name: ""}}
+
+		if err := fl.Handle(c); err != nil {
+			t.Fatalf("Handle() err = %v", err)
+		}
+
+		if len(sender.msgs) != 2 {
+			t.Fatalf("got %d messages, want 2", len(sender.msgs))
+		}
+		want := "¡Hola! Bienvenido a Wagot Viajes ✈️"
+		if got := sender.msgs[0].Text.Body; got != want {
+			t.Errorf("got welcome text %q, want %q", got, want)
+		}
+	})
+
+	t.Run("strips {{name}} gracefully when profile name is empty and no fallback", func(t *testing.T) {
+		sender := &recordSender{}
+		fl := &Flow{
+			Greetings:       []string{"hola"},
+			WelcomeTemplate: "¡Hola, {{name}}! Bienvenido a Wagot Viajes ✈️",
+			MainMenu: bot.Buttons{
+				Body: "¿En qué podemos ayudarte?",
+				Buttons: []bot.Button{{ID: "b1", Title: "Opciones"}},
+			},
+		}
+
+		msg := bot.Message{ID: "m1", From: "1555", Type: bot.MessageTypeText, Text: "hola"}
+		c := bot.NewContext(context.Background(), sender, "PNID", msg)
+		c.Contact = bot.Contact{Profile: bot.Profile{Name: ""}}
+
+		if err := fl.Handle(c); err != nil {
+			t.Fatalf("Handle() err = %v", err)
+		}
+
+		if len(sender.msgs) != 2 {
+			t.Fatalf("got %d messages, want 2", len(sender.msgs))
+		}
+		want := "¡Hola! Bienvenido a Wagot Viajes ✈️"
+		if got := sender.msgs[0].Text.Body; got != want {
+			t.Errorf("got welcome text %q, want %q", got, want)
+		}
+	})
+
+	t.Run("safely handles template with percent characters and {{name}}", func(t *testing.T) {
+		sender := &recordSender{}
+		fl := &Flow{
+			Greetings:       []string{"hola"},
+			WelcomeTemplate: "100% garantizado: ¡Hola {{name}}!",
+			MainMenu: bot.Buttons{
+				Body: "¿En qué podemos ayudarte?",
+				Buttons: []bot.Button{{ID: "b1", Title: "Opciones"}},
+			},
+		}
+
+		msg := bot.Message{ID: "m1", From: "1555", Type: bot.MessageTypeText, Text: "hola"}
+		c := bot.NewContext(context.Background(), sender, "PNID", msg)
+		c.Contact = bot.Contact{Profile: bot.Profile{Name: "Santiago"}}
+
+		if err := fl.Handle(c); err != nil {
+			t.Fatalf("Handle() err = %v", err)
+		}
+
+		want := "100% garantizado: ¡Hola Santiago!"
+		if got := sender.msgs[0].Text.Body; got != want {
+			t.Errorf("got welcome text %q, want %q", got, want)
+		}
+	})
+}

@@ -12,7 +12,6 @@ import (
 
 type rawFlow struct {
 	Greetings       []string           `json:"greetings"`
-	Welcome         string             `json:"welcome"`
 	WelcomeTemplate string             `json:"welcome_template"`
 	WelcomeFallback string             `json:"welcome_fallback"`
 	UnsupportedText string             `json:"unsupported_text"`
@@ -100,17 +99,6 @@ func LoadJSON(data []byte) (*Flow, error) {
 		steps[id] = parsed
 	}
 
-	welcomeTemplate := raw.WelcomeTemplate
-	welcomeFallback := raw.WelcomeFallback
-	if raw.Welcome != "" {
-		if welcomeTemplate == "" {
-			welcomeTemplate = raw.Welcome
-		}
-		if welcomeFallback == "" {
-			welcomeFallback = raw.Welcome
-		}
-	}
-
 	greetings := raw.Greetings
 	if len(greetings) == 0 {
 		greetings = []string{"hola", "informacion", "menu"}
@@ -118,8 +106,8 @@ func LoadJSON(data []byte) (*Flow, error) {
 
 	fl := &Flow{
 		Greetings:       greetings,
-		WelcomeTemplate: welcomeTemplate,
-		WelcomeFallback: welcomeFallback,
+		WelcomeTemplate: raw.WelcomeTemplate,
+		WelcomeFallback: raw.WelcomeFallback,
 		UnsupportedText: raw.UnsupportedText,
 		MainMenu: bot.Buttons{
 			Body:    raw.MainMenu.Body,
@@ -169,40 +157,8 @@ func validateReply(stepID string, r bot.Reply) error {
 	if r == nil {
 		return fmt.Errorf("step %q: reply cannot be nil", stepID)
 	}
-	var errs []error
-	switch rep := r.(type) {
-	case bot.Text:
-		if strings.TrimSpace(rep.Body) == "" {
-			errs = append(errs, fmt.Errorf("step %q: text reply body cannot be empty", stepID))
-		}
-	case bot.Image:
-		if strings.TrimSpace(rep.URL) == "" {
-			errs = append(errs, fmt.Errorf("step %q: image reply url cannot be empty", stepID))
-		} else if !strings.HasPrefix(strings.ToLower(rep.URL), "https://") {
-			errs = append(errs, fmt.Errorf("step %q: image reply url must be a public HTTPS URL, got %q", stepID, rep.URL))
-		}
-	case bot.Buttons:
-		errs = append(errs, validateButtons(fmt.Sprintf("step %q: buttons reply", stepID), rep)...)
-	case bot.List:
-		if strings.TrimSpace(rep.Body) == "" {
-			errs = append(errs, fmt.Errorf("step %q: list reply body cannot be empty", stepID))
-		}
-		if strings.TrimSpace(rep.Button) == "" {
-			errs = append(errs, fmt.Errorf("step %q: list reply button label cannot be empty", stepID))
-		}
-		if len(rep.Items) < 1 || len(rep.Items) > 10 {
-			errs = append(errs, fmt.Errorf("step %q: list reply must have between 1 and 10 items", stepID))
-		}
-		for i, it := range rep.Items {
-			if strings.TrimSpace(it.ID) == "" {
-				errs = append(errs, fmt.Errorf("step %q: item[%d]: list item id cannot be empty", stepID, i))
-			}
-			if strings.TrimSpace(it.Title) == "" {
-				errs = append(errs, fmt.Errorf("step %q: item[%d]: list item title cannot be empty", stepID, i))
-			}
-		}
-	default:
-		errs = append(errs, fmt.Errorf("step %q: unknown step reply type %T", stepID, r))
+	if err := r.Validate(); err != nil {
+		return fmt.Errorf("step %q: %w", stepID, err)
 	}
-	return errors.Join(errs...)
+	return nil
 }

@@ -625,9 +625,9 @@ func TestStepReplyValidationErrors(t *testing.T) {
 }
 
 func TestWelcomeCopySingleFieldAndFallback(t *testing.T) {
-	t.Run("single welcome field works with and without profile name", func(t *testing.T) {
+	t.Run("single welcome fallback field works with and without profile name", func(t *testing.T) {
 		jsonContent := `{
-			"welcome": "¡Bienvenidos a Dulces & Pasteles!",
+			"welcome_fallback": "¡Bienvenidos a Dulces & Pasteles!",
 			"main_menu": {
 				"body": "¿Qué postre deseas?",
 				"buttons": [{"id": "cakes", "title": "Pasteles"}]
@@ -697,7 +697,7 @@ func TestWelcomeCopySingleFieldAndFallback(t *testing.T) {
 func TestGreetingKeywordsWithAccentsAndCasing(t *testing.T) {
 	jsonContent := `{
 		"greetings": ["Hola", "Menú", "Información"],
-		"welcome": "¡Bienvenido a nuestra tienda!",
+		"welcome_fallback": "¡Bienvenido a nuestra tienda!",
 		"main_menu": {
 			"body": "Menú",
 			"buttons": [{"id": "b1", "title": "B1"}]

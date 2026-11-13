@@ -143,6 +143,3 @@ func loadFlow(path string) (*flow.Flow, error) {
 	}
 	return flow.LoadFile(path)
 }
-
-// converse is the default Conversational Handler driven by the trip agency Flow.
-var converse = flow.NewHandler()

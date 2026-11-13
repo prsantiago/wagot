@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -31,6 +32,7 @@ type Profile struct {
 
 // Reply is a declarative outbound reply.
 type Reply interface {
+	Validate() error
 	toCloudAPI() (cloudapi.Message, error)
 }
 
@@ -40,9 +42,17 @@ type Text struct {
 	PreviewURL bool
 }
 
+// Validate ensures text reply invariants hold.
+func (t Text) Validate() error {
+	if strings.TrimSpace(t.Body) == "" {
+		return errors.New("bot: text reply body cannot be empty")
+	}
+	return nil
+}
+
 func (t Text) toCloudAPI() (cloudapi.Message, error) {
-	if t.Body == "" {
-		return cloudapi.Message{}, errors.New("bot: text body cannot be empty")
+	if err := t.Validate(); err != nil {
+		return cloudapi.Message{}, err
 	}
 	return cloudapi.TextMessageWithPreview(t.Body, t.PreviewURL), nil
 }
@@ -53,14 +63,23 @@ type Image struct {
 	Caption string
 }
 
+// Validate ensures image reply invariants hold.
+func (img Image) Validate() error {
+	url := strings.TrimSpace(img.URL)
+	if url == "" {
+		return errors.New("bot: image reply url cannot be empty")
+	}
+	if !strings.HasPrefix(strings.ToLower(url), "https://") {
+		return errors.New("bot: image reply url must be a public HTTPS URL")
+	}
+	return nil
+}
+
 func (img Image) toCloudAPI() (cloudapi.Message, error) {
-	if img.URL == "" {
-		return cloudapi.Message{}, errors.New("bot: image URL cannot be empty")
+	if err := img.Validate(); err != nil {
+		return cloudapi.Message{}, err
 	}
-	if !strings.HasPrefix(img.URL, "https://") {
-		return cloudapi.Message{}, errors.New("bot: image URL must use https")
-	}
-	return cloudapi.ImageMessage(img.URL, img.Caption), nil
+	return cloudapi.ImageMessage(strings.TrimSpace(img.URL), img.Caption), nil
 }
 
 // Button is an action button on a Button Reply.
@@ -69,24 +88,48 @@ type Button struct {
 	Title string
 }
 
+// Validate ensures button invariants hold.
+func (b Button) Validate() error {
+	if strings.TrimSpace(b.ID) == "" {
+		return errors.New("bot: button id cannot be empty")
+	}
+	if strings.TrimSpace(b.Title) == "" {
+		return errors.New("bot: button title cannot be empty")
+	}
+	return nil
+}
+
 // Buttons is an interactive button reply presenting up to three buttons.
 type Buttons struct {
 	Body    string
 	Buttons []Button
 }
 
-func (b Buttons) toCloudAPI() (cloudapi.Message, error) {
-	if b.Body == "" {
-		return cloudapi.Message{}, errors.New("bot: button reply body cannot be empty")
+// Validate ensures buttons reply invariants hold.
+func (b Buttons) Validate() error {
+	if strings.TrimSpace(b.Body) == "" {
+		return errors.New("bot: buttons reply body is required")
 	}
-	if len(b.Buttons) == 0 || len(b.Buttons) > 3 {
-		return cloudapi.Message{}, errors.New("bot: button reply must have between 1 and 3 buttons")
+	if len(b.Buttons) < 1 || len(b.Buttons) > 3 {
+		return errors.New("bot: buttons reply must have between 1 and 3 buttons")
+	}
+	for i, btn := range b.Buttons {
+		if strings.TrimSpace(btn.ID) == "" {
+			return fmt.Errorf("bot: button[%d]: button id cannot be empty", i)
+		}
+		if strings.TrimSpace(btn.Title) == "" {
+			return fmt.Errorf("bot: button[%d]: button title cannot be empty", i)
+		}
+	}
+	return nil
+}
+
+func (b Buttons) toCloudAPI() (cloudapi.Message, error) {
+	if err := b.Validate(); err != nil {
+		return cloudapi.Message{}, err
 	}
 	cloudButtons := make([]cloudapi.Button, len(b.Buttons))
 	for i, btn := range b.Buttons {
-		if btn.ID == "" || btn.Title == "" {
-			return cloudapi.Message{}, errors.New("bot: button ID and title cannot be empty")
-		}
 		cloudButtons[i] = cloudapi.Button{
 			ID:    btn.ID,
 			Title: btn.Title,
@@ -102,6 +145,17 @@ type ListItem struct {
 	Description string
 }
 
+// Validate ensures list item invariants hold.
+func (it ListItem) Validate() error {
+	if strings.TrimSpace(it.ID) == "" {
+		return errors.New("bot: list item id cannot be empty")
+	}
+	if strings.TrimSpace(it.Title) == "" {
+		return errors.New("bot: list item title cannot be empty")
+	}
+	return nil
+}
+
 // List is an interactive list reply presenting a menu button opening a selectable list of options.
 type List struct {
 	Body   string
@@ -109,24 +163,34 @@ type List struct {
 	Items  []ListItem
 }
 
+// Validate ensures list reply invariants hold.
+func (l List) Validate() error {
+	if strings.TrimSpace(l.Body) == "" {
+		return errors.New("bot: list reply body cannot be empty")
+	}
+	if strings.TrimSpace(l.Button) == "" {
+		return errors.New("bot: list reply button label cannot be empty")
+	}
+	if len(l.Items) < 1 || len(l.Items) > 10 {
+		return errors.New("bot: list reply must have between 1 and 10 items")
+	}
+	for i, item := range l.Items {
+		if strings.TrimSpace(item.ID) == "" {
+			return fmt.Errorf("bot: item[%d]: list item id cannot be empty", i)
+		}
+		if strings.TrimSpace(item.Title) == "" {
+			return fmt.Errorf("bot: item[%d]: list item title cannot be empty", i)
+		}
+	}
+	return nil
+}
+
 func (l List) toCloudAPI() (cloudapi.Message, error) {
-	if l.Body == "" {
-		return cloudapi.Message{}, errors.New("bot: list reply body cannot be empty")
-	}
-	if l.Button == "" {
-		return cloudapi.Message{}, errors.New("bot: list reply button cannot be empty")
-	}
-	if len(l.Items) == 0 {
-		return cloudapi.Message{}, errors.New("bot: list reply must have at least 1 item")
-	}
-	if len(l.Items) > 10 {
-		return cloudapi.Message{}, errors.New("bot: list reply cannot have more than 10 items")
+	if err := l.Validate(); err != nil {
+		return cloudapi.Message{}, err
 	}
 	rows := make([]cloudapi.ListRow, len(l.Items))
 	for i, item := range l.Items {
-		if item.ID == "" || item.Title == "" {
-			return cloudapi.Message{}, errors.New("bot: list item ID and title cannot be empty")
-		}
 		rows[i] = cloudapi.ListRow{
 			ID:          item.ID,
 			Title:       item.Title,

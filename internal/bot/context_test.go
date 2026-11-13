@@ -238,10 +238,36 @@ func TestContextSendValidation(t *testing.T) {
 			reply:   Image{URL: "http://example.com/pic.jpg", Caption: "caption"},
 			wantErr: true,
 		},
+		"whitespace-only text": {
+			reply:   Text{Body: "   "},
+			wantErr: true,
+		},
+		"whitespace-only button id": {
+			reply:   Buttons{Body: "select", Buttons: []Button{{ID: "   ", Title: "Title"}}},
+			wantErr: true,
+		},
+		"whitespace-only button title": {
+			reply:   Buttons{Body: "select", Buttons: []Button{{ID: "1", Title: "   "}}},
+			wantErr: true,
+		},
+		"uppercase https image URL allowed": {
+			reply:   Image{URL: "HTTPS://example.com/pic.jpg", Caption: "caption"},
+			wantErr: false,
+		},
+		"whitespace-padded https image URL allowed": {
+			reply:   Image{URL: "  https://example.com/pic.jpg  ", Caption: "caption"},
+			wantErr: false,
+		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
+			if tc.reply != nil {
+				valErr := tc.reply.Validate()
+				if (valErr != nil) != tc.wantErr {
+					t.Errorf("reply.Validate() error = %v, wantErr %v", valErr, tc.wantErr)
+				}
+			}
 			err := c.Send(tc.reply)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("c.Send() error = %v, wantErr %v", err, tc.wantErr)

@@ -49,12 +49,22 @@ func (f *Flow) Handle(c *bot.Context) error {
 		if f.isGreeting(c.Message.Text) {
 			name := strings.TrimSpace(c.Contact.Profile.Name)
 			var welcome string
-			if name != "" && f.WelcomeTemplate != "" && strings.Contains(f.WelcomeTemplate, "%s") {
-				welcome = fmt.Sprintf(f.WelcomeTemplate, name)
+			if name != "" && f.WelcomeTemplate != "" {
+				if strings.Contains(f.WelcomeTemplate, "{{name}}") {
+					welcome = strings.ReplaceAll(f.WelcomeTemplate, "{{name}}", name)
+				} else if strings.Contains(f.WelcomeTemplate, "%s") {
+					welcome = fmt.Sprintf(f.WelcomeTemplate, name)
+				} else {
+					welcome = f.WelcomeTemplate
+				}
 			} else if f.WelcomeFallback != "" {
 				welcome = f.WelcomeFallback
 			} else if f.WelcomeTemplate != "" {
-				w := strings.ReplaceAll(f.WelcomeTemplate, ", %s", "")
+				w := f.WelcomeTemplate
+				w = strings.ReplaceAll(w, ", {{name}}", "")
+				w = strings.ReplaceAll(w, "{{name}}, ", "")
+				w = strings.ReplaceAll(w, "{{name}}", "")
+				w = strings.ReplaceAll(w, ", %s", "")
 				w = strings.ReplaceAll(w, "%s, ", "")
 				w = strings.ReplaceAll(w, "%s", "")
 				welcome = strings.TrimSpace(w)

@@ -26,6 +26,12 @@ func (f *fakeSender) MarkRead(ctx context.Context, phoneNumberID, messageID stri
 }
 
 func TestConverse(t *testing.T) {
+	fl, err := loadFlow("")
+	if err != nil {
+		t.Fatalf("loadFlow() err = %v", err)
+	}
+	converse := fl.Handle
+
 	tests := map[string]struct {
 		msgType     bot.MessageType
 		text        string
