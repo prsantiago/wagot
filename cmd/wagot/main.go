@@ -11,10 +11,11 @@
 //	WHATSAPP_ACCESS_TOKEN     token with whatsapp_business_messaging (required)
 //	WHATSAPP_VERIFY_TOKEN     webhook verify token you choose in the dashboard (required)
 //	WHATSAPP_APP_SECRET       Meta app secret used to verify signatures (required)
+//	FLOW_FILE                 path to custom flow JSON configuration file (optional)
 //
 // Usage:
 //
-//	wagot [-env-file path]
+//	wagot [-env-file path] [-flow-file path]
 package main
 
 import (
@@ -32,12 +33,14 @@ import (
 
 	"github.com/chachin/wagot/internal/bot"
 	"github.com/chachin/wagot/internal/dotenv"
+	"github.com/chachin/wagot/internal/flow"
 )
 
 const shutdownTimeout = 30 * time.Second
 
 func main() {
 	envFile := flag.String("env-file", ".env", "`path` to a KEY=VALUE file; ignored if missing")
+	flowFile := flag.String("flow-file", "", "`path` to custom JSON flow configuration file")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -48,7 +51,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "load env file:", err)
 		os.Exit(1)
 	}
-	if err := run(ctx, getenv(fileVars), os.Stderr); err != nil {
+	if err := run(ctx, getenv(fileVars), os.Stderr, *flowFile); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -65,15 +68,20 @@ func getenv(fileVars map[string]string) func(string) string {
 }
 
 // run starts the server and blocks until ctx is cancelled or the server fails.
-func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
+func run(ctx context.Context, getenv func(string) string, stderr io.Writer, flowFlag string) error {
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
 
-	cfg, err := loadConfig(getenv)
+	cfg, err := loadConfig(getenv, flowFlag)
 	if err != nil {
 		return fmt.Errorf("invalid configuration:\n%w", err)
 	}
 
-	b, err := bot.New(nil, converse, bot.Config{
+	fl, err := loadFlow(cfg.flowFile)
+	if err != nil {
+		return fmt.Errorf("load flow: %w", err)
+	}
+
+	b, err := bot.New(nil, fl.Handle, bot.Config{
 		PhoneNumberID: cfg.phoneNumberID,
 		VerifyToken:   cfg.verifyToken,
 		AppSecret:     cfg.appSecret,
@@ -129,20 +137,9 @@ func newMux(b *bot.Bot) *http.ServeMux {
 	return mux
 }
 
-// converse is the Conversational Handler. It evaluates an incoming message and
-// decides which replies or reactions to emit.
-func converse(c *bot.Context) error {
-	switch c.Message.Type {
-	case bot.MessageTypeText:
-		return c.Reply("You said: " + c.Message.Text)
-	case bot.MessageTypeInteractive:
-		return c.Reply("You picked: " + c.Message.Text)
-	case bot.MessageTypeReaction, bot.MessageTypeSystem:
-		return nil // nothing to answer
-	default:
-		if err := c.React("👀"); err != nil {
-			return err
-		}
-		return c.Reply("Sorry, I can only read text messages for now.")
+func loadFlow(path string) (*flow.Flow, error) {
+	if path == "" {
+		return flow.DefaultFlow(), nil
 	}
+	return flow.LoadFile(path)
 }

@@ -291,22 +291,27 @@ func wireToContact(contacts []wireContact, waID string) Contact {
 
 func wireToMessage(m wireMessage) Message {
 	text := ""
+	selectionID := ""
 	if m.Text != nil {
 		text = m.Text.Body
 	} else if m.Interactive != nil {
 		if m.Interactive.ButtonReply != nil {
 			text = m.Interactive.ButtonReply.Title
+			selectionID = m.Interactive.ButtonReply.ID
 		} else if m.Interactive.ListReply != nil {
 			text = m.Interactive.ListReply.Title
+			selectionID = m.Interactive.ListReply.ID
 		}
 	} else if m.Button != nil {
 		text = m.Button.Text
+		selectionID = m.Button.Payload
 	}
 	return Message{
-		ID:   m.ID,
-		From: m.From,
-		Type: MessageType(m.Type),
-		Text: text,
+		ID:          m.ID,
+		From:        m.From,
+		Type:        MessageType(m.Type),
+		Text:        text,
+		SelectionID: selectionID,
 	}
 }
 

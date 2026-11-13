@@ -19,7 +19,7 @@ func lookup(m map[string]string) func(string) string {
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
-	cfg, err := loadConfig(lookup(validEnv()))
+	cfg, err := loadConfig(lookup(validEnv()), "")
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
@@ -32,6 +32,45 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.phoneNumberID != "106540352242922" {
 		t.Errorf("phoneNumberID = %q", cfg.phoneNumberID)
 	}
+	if cfg.flowFile != "" {
+		t.Errorf("flowFile = %q, want empty", cfg.flowFile)
+	}
+}
+
+func TestLoadConfigFlowFilePrecedence(t *testing.T) {
+	t.Run("default is empty", func(t *testing.T) {
+		cfg, err := loadConfig(lookup(validEnv()), "")
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.flowFile != "" {
+			t.Errorf("flowFile = %q, want empty", cfg.flowFile)
+		}
+	})
+
+	t.Run("FLOW_FILE env set", func(t *testing.T) {
+		env := validEnv()
+		env[envFlowFile] = "/path/to/env_flow.json"
+		cfg, err := loadConfig(lookup(env), "")
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.flowFile != "/path/to/env_flow.json" {
+			t.Errorf("flowFile = %q, want /path/to/env_flow.json", cfg.flowFile)
+		}
+	})
+
+	t.Run("CLI flag overrides FLOW_FILE env", func(t *testing.T) {
+		env := validEnv()
+		env[envFlowFile] = "/path/to/env_flow.json"
+		cfg, err := loadConfig(lookup(env), "/path/to/flag_flow.json")
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.flowFile != "/path/to/flag_flow.json" {
+			t.Errorf("flowFile = %q, want /path/to/flag_flow.json", cfg.flowFile)
+		}
+	})
 }
 
 func TestLoadConfigOverrides(t *testing.T) {
@@ -39,7 +78,7 @@ func TestLoadConfigOverrides(t *testing.T) {
 	env[envPort] = "3000"
 	env[envAPIVersion] = "v25.0"
 
-	cfg, err := loadConfig(lookup(env))
+	cfg, err := loadConfig(lookup(env), "")
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
@@ -67,7 +106,7 @@ func TestLoadConfigErrors(t *testing.T) {
 			env := validEnv()
 			env[tc.key] = tc.value
 
-			_, err := loadConfig(lookup(env))
+			_, err := loadConfig(lookup(env), "")
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("err = %v, want containing %q", err, tc.wantErr)
 			}
@@ -76,7 +115,7 @@ func TestLoadConfigErrors(t *testing.T) {
 }
 
 func TestLoadConfigReportsAllMissing(t *testing.T) {
-	_, err := loadConfig(lookup(nil))
+	_, err := loadConfig(lookup(nil), "")
 	if err == nil {
 		t.Fatal("loadConfig succeeded, want error")
 	}

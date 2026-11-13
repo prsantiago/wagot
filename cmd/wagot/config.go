@@ -19,6 +19,7 @@ const (
 	envAccessToken   = "WHATSAPP_ACCESS_TOKEN"
 	envVerifyToken   = "WHATSAPP_VERIFY_TOKEN"
 	envAppSecret     = "WHATSAPP_APP_SECRET"
+	envFlowFile      = "FLOW_FILE"
 )
 
 const defaultPort = "8080"
@@ -35,11 +36,12 @@ type config struct {
 	accessToken   string
 	verifyToken   string
 	appSecret     string
+	flowFile      string
 }
 
 // loadConfig reads and validates the configuration, reporting every problem
 // at once.
-func loadConfig(getenv func(string) string) (config, error) {
+func loadConfig(getenv func(string) string, flowFlag string) (config, error) {
 	var errs []error
 	required := func(key string) string {
 		v := getenv(key)
@@ -55,6 +57,11 @@ func loadConfig(getenv func(string) string) (config, error) {
 		return def
 	}
 
+	flowFile := getenv(envFlowFile)
+	if flowFlag != "" {
+		flowFile = flowFlag
+	}
+
 	port := withDefault(envPort, defaultPort)
 	cfg := config{
 		addr:          net.JoinHostPort("", port),
@@ -63,6 +70,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		accessToken:   required(envAccessToken),
 		verifyToken:   required(envVerifyToken),
 		appSecret:     required(envAppSecret),
+		flowFile:      flowFile,
 	}
 
 	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
