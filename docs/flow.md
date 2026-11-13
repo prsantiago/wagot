@@ -11,11 +11,10 @@ A complete reference template is provided at [flow.example.json](../flow.example
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `greetings` | `[]string` | Optional | Incoming keywords (case-insensitive, normalized for punctuation) that trigger the welcome greeting. Defaults to `["hola", "informacion", "menu"]`. |
-| `welcome` | `string` | Optional | Static welcome copy sent to the User upon receiving a greeting keyword. |
 | `welcome_template` | `string` | Optional | Welcome message template addressing the User by name using a `{{name}}` placeholder (e.g. `"¡Hola, {{name}}! Bienvenido"`). |
 | `welcome_fallback` | `string` | Optional | Welcome message sent if the User's WhatsApp profile name is not present. |
 | `unsupported_text` | `string` | Optional | Text reply sent when the User sends an unsupported message type (audio, video, sticker, location). |
-| `main_menu` | `object` | **Required** | The default Button Reply presented after greetings or when no specific route matches. |
+| `main_menu` | `object` | **Required** | The default Button Reply presented after greetings or when no specific step matches. |
 | `steps` | `object` | Optional | Map of Selection IDs (matching button/list IDs) to step definitions. |
 
 ### Main Menu (`main_menu`)
